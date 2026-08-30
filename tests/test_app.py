@@ -21,6 +21,41 @@ def fake_collect(gene, **kwargs):
     }
 
 
+DISEASE_PATHWAYS = [
+    {"term_id": "R-HSA-1", "name": "Amyloid fiber formation", "source": "REAC",
+     "p_value": 1e-10, "genes": ["APP", "PSEN1"]},
+    {"term_id": "GO:1", "name": "neuron death", "source": "GO:BP",
+     "p_value": 1e-5, "genes": ["MAPT"]},
+    {"term_id": "WP:1", "name": "unrelated", "source": "WP",
+     "p_value": 1e-2, "genes": ["ZZZ"]},
+]
+# Enrichment of each gene's neighbourhood, keyed by the first query gene.
+GENE_PATHWAYS = {
+    "APP": [{"term_id": "R-HSA-1", "p_value": 1e-9}, {"term_id": "GO:1", "p_value": 1e-4}],
+    "PSEN1": [{"term_id": "R-HSA-1", "p_value": 1e-8}],
+    "LONELY": [],
+}
+
+
+def make_fake_enrich():
+    """Stub for enrich_gene_list.
+
+    The disease signature is enriched once, before any gene work, so the first
+    call is the disease list; later calls are per-gene neighbourhoods. Matching
+    on the gene list alone would be ambiguous, since a gene's neighbourhood can
+    be exactly the disease gene set.
+    """
+    state = {"disease_done": False}
+
+    def fake_enrich(genes, max_results=50, **kwargs):
+        if not state["disease_done"]:
+            state["disease_done"] = True
+            return list(DISEASE_PATHWAYS)
+        return list(GENE_PATHWAYS.get((genes[0] if genes else "").upper(), []))
+
+    return fake_enrich
+
+
 def fake_resolve_symbols(genes):
     return [
         {"input": g, "symbol": g.upper(), "status": "approved", "hgnc_id": f"HGNC:{g}", "name": ""}
@@ -36,6 +71,7 @@ def patched(monkeypatch):
                         lambda disease_id, top_n=100: ("Alzheimer disease", list(DISEASE_GENES)))
     monkeypatch.setattr(app_module, "collect_ppi_partners", fake_collect)
     monkeypatch.setattr(app_module, "resolve_gene_symbols", fake_resolve_symbols)
+    monkeypatch.setattr(app_module, "enrich_gene_list", make_fake_enrich())
     return monkeypatch
 
 
@@ -345,6 +381,99 @@ def test_one_failing_gene_does_not_sink_the_request(monkeypatch, client):
     by_gene = {r["gene"]: r for r in body["results"]}
     assert by_gene["BAD"]["error"] == "ppi exploded"
     assert by_gene["APP"]["weighted_score"] > 0
+
+
+# --- enrichment overlap (second table) -------------------------------------
+
+def test_enrichment_overlap_is_returned_per_gene(client):
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["enrichment"]["enabled"] is True
+    assert body["enrichment"]["disease_pathway_count"] == 3
+    assert [p["name"] for p in body["enrichment"]["top_pathways"]][0] == "Amyloid fiber formation"
+
+    r = body["results"][0]
+    # APP's neighbourhood reproduces 2 of the 3 disease pathways...
+    assert r["pathway_overlap_count"] == 2
+    assert r["disease_pathway_count"] == 3
+    assert r["pathway_overlap_percent"] == 66.7
+    # ...and those two carry almost all the significance weight.
+    assert r["pathway_weighted_percent"] == 88.2
+    assert r["pathway_interpretation"] == "strong"
+    assert [p["name"] for p in r["overlapping_pathways"]] == [
+        "Amyloid fiber formation", "neuron death"]
+
+
+def test_target_fit_reports_pathways_containing_the_gene(client):
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["results"][0]
+    # APP is annotated to 1 of the 3 disease pathways.
+    assert r["target_in_pathway_count"] == 1
+    assert r["target_fit_percent"] == 33.3
+    assert r["target_in_pathways"][0]["name"] == "Amyloid fiber formation"
+
+
+def test_gene_with_no_enriched_pathways_scores_zero(client):
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["LONELY"]}).get_json()
+    r = body["results"][0]
+    assert r["pathway_overlap_percent"] == 0.0
+    assert r["pathway_weighted_percent"] == 0.0
+    assert r["target_in_pathway_count"] == 0
+
+
+def test_enrichment_can_be_disabled_per_request(client):
+    body = client.post("/api/analyze",
+                       json={"disease": "AD", "genes": ["APP"], "enrichment": False}).get_json()
+    assert body["enrichment"]["enabled"] is False
+    assert body["enrichment"]["disease_pathway_count"] == 0
+    assert "pathway_overlap_percent" not in body["results"][0]
+    # The gene-level overlap is unaffected.
+    assert body["results"][0]["weighted_percent"] == 100.0
+
+
+def test_enrichment_can_be_disabled_by_config(patched):
+    c = create_app({"TESTING": True, "ENRICHMENT": False}).test_client()
+    body = c.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["enrichment"]["enabled"] is False
+    assert "pathway_overlap_percent" not in body["results"][0]
+
+
+def test_a_request_cannot_re_enable_disabled_enrichment(patched):
+    c = create_app({"TESTING": True, "ENRICHMENT": False}).test_client()
+    body = c.post("/api/analyze",
+                  json={"disease": "AD", "genes": ["APP"], "enrichment": True}).get_json()
+    assert body["enrichment"]["enabled"] is False
+
+
+def test_enrichment_outage_leaves_the_gene_table_intact(monkeypatch, client):
+    monkeypatch.setattr(app_module, "enrich_gene_list", lambda genes, **kw: [])
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["enrichment"]["disease_pathway_count"] == 0
+    assert "pathway_overlap_percent" not in body["results"][0]
+    assert body["results"][0]["weighted_percent"] == 100.0
+
+
+def test_disease_signature_is_enriched_once_not_per_gene(monkeypatch, client):
+    calls = []
+    fake = make_fake_enrich()
+    def counting(genes, **kwargs):
+        calls.append(list(genes))
+        return fake(genes, **kwargs)
+    monkeypatch.setattr(app_module, "enrich_gene_list", counting)
+    client.post("/api/analyze", json={"disease": "AD", "genes": ["APP", "PSEN1", "LONELY"]})
+    # One call for the disease signature, then one per gene.
+    assert len(calls) == 4
+    assert calls[0] == ["APP", "PSEN1", "MAPT"]
+
+
+def test_enrichment_uses_the_same_disease_genes_as_the_overlap(monkeypatch, client):
+    seen = {}
+    fake = make_fake_enrich()
+    def capture(genes, **kwargs):
+        seen.setdefault("first", list(genes))
+        return fake(genes, **kwargs)
+    monkeypatch.setattr(app_module, "enrich_gene_list", capture)
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert seen["first"] == [g["symbol"] for g in DISEASE_GENES]
+    assert body["enrichment"]["disease_gene_n"] == body["disease_gene_count"]
 
 
 # --- pages -----------------------------------------------------------------

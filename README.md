@@ -7,7 +7,9 @@
 1. **疾患** — Open Targets を検索し、候補から選んで EFO/MONDO ID を確定
 2. **遺伝子** — HGNC (HUGO) の公式シンボルと照合（別名・旧シンボルは自動変換）
 3. **PPI** — SIGNOR / STRING / BioGRID の組み合わせとスコア条件を選択
-4. **解析** — 重複率を加重・単純の2指標で算出
+4. **解析** — 2つの表で重複を評価
+   - **表1 遺伝子重複** — PPIパートナーと疾患遺伝子の重複
+   - **表2 パスウェイ重複** — 疾患のエンリッチメント解析結果との重複
 
 PPI の収集・統合・ランキングは
 [aiagent_hypothesis_generator002](https://github.com/pepsea/aiagent_hypothesis_generator002)
@@ -107,6 +109,35 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
 | STRING | `required_score` 付きで遺伝子ごとに取得（3日キャッシュ） | パートナー同士のエッジを除外、パートナーごとに最高スコアの1件のみ |
 | BioGRID | 遺伝子ごとに取得（`selfInteractionsExcluded`） | 実験手法・文献違いの重複をパートナーごとに1件へ集約 |
 
+## 2つの表
+
+### 表1 — 疾患ネットワーク重複（遺伝子レベル）
+
+遺伝子のPPIパートナーが、疾患の Open Targets 上位遺伝子を何％カバーするか。
+
+### 表2 — 疾患エンリッチメント重複（パスウェイレベル）
+
+疾患遺伝子を g:Profiler でエンリッチメント解析して「疾患パスウェイ signature」を
+作り、各遺伝子の**PPIネットワーク（自身＋パートナー）のエンリッチメント結果**が
+それを何％再現するかを見ます。
+
+遺伝子レベルでは重複しなくても、同じパスウェイ上にいる場合があります。
+表2はその機能的な近さを拾います。
+
+| 指標 | 定義 |
+|---|---|
+| 加重パスウェイ重複率 | 重複パスウェイの `-log10(p)` 合計 ÷ 疾患パスウェイ全体の `-log10(p)` 合計。有意なパスウェイほど重く数えます |
+| 単純パスウェイ重複率 | 重複パスウェイ数 ÷ 疾患パスウェイ数 |
+| ターゲット自身の該当 | 疾患パスウェイのうち、ターゲット遺伝子自身が構成遺伝子として含まれる数（元プロジェクトの `pathway_fit` に相当） |
+
+エンリッチメント解析は STEP 3 のチェックボックスで ON/OFF できます（既定 ON）。
+OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profiler に到達できない
+場合も表1はそのまま表示されます。
+
+疾患パスウェイの算出には、**表1と同じ疾患遺伝子リスト**を使います
+（`NW_ENRICH_GENE_N` で件数を変更可能）。2つの表が同じ疾患を指すようにするため
+です。移植元は 20 遺伝子でエンリッチメントしていました。
+
 ## スコアの定義
 
 ```
@@ -156,6 +187,7 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
   "disease_id": "EFO_0000249",        // STEP 1 で選んだID（`disease` 名でも可）
   "genes": ["APP", "PS1", "APOE"],    // 配列でも改行・カンマ区切り文字列でも可
   "top_n": 100,                        // 疾患上位遺伝子数（任意、上限500）
+  "enrichment": true,                  // 表2を計算するか（既定 true）
   "ppi": {
     "sources": ["signor", "string", "biogrid"],
     "string_score": 700,
@@ -174,6 +206,11 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
   "disease_gene_count": 100,
   "ppi": { "...実際に使われた設定..." },
   "genes": { "resolved": [ /* HGNC照合結果 */ ], "summary": { "approved": 3 } },
+  "enrichment": {
+    "enabled": true, "disease_pathway_count": 4, "disease_gene_n": 100,
+    "top_pathways": [ { "term_id": "R-HSA-977225", "name": "Amyloid fiber formation",
+                        "source": "REAC", "p_value": 1e-12 } ]
+  },
   "results": [
     {
       "gene": "PSEN1", "input_gene": "PS1", "symbol_status": "alias",
@@ -185,7 +222,18 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
       "excluded_hub_count": 0, "source_counts": { "SIGNOR": 2 },
       "target_self": "PSEN1", "target_self_score": 0.71,
       "interpretation": "strong",
-      "overlapping_genes": [ { "symbol": "APP", "score": 0.92 } ]
+      "overlapping_genes": [ { "symbol": "APP", "score": 0.92 } ],
+
+      // 表2（enrichment 有効時のみ）
+      "pathway_weighted_percent": 58.6, "pathway_overlap_percent": 75.0,
+      "pathway_overlap_count": 3, "disease_pathway_count": 4,
+      "gene_pathway_count": 3,
+      "target_in_pathway_count": 2, "target_fit_percent": 50.0,
+      "pathway_interpretation": "strong",
+      "overlapping_pathways": [
+        { "term_id": "R-HSA-977225", "name": "Amyloid fiber formation",
+          "source": "REAC", "p_value": 1e-12 }
+      ]
     }
   ]
 }
@@ -214,6 +262,8 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
 | `NW_STRING_SCORE` | `700` | STRING 信頼度閾値の既定値 |
 | `NW_HUB_THRESHOLD` | `1000` | ハブ判定の既定値 |
 | `NW_MAX_NODES` | `100` | PPIパートナー上限の既定値 |
+| `NW_ENRICH_GENE_N` | `100` | エンリッチメントに使う疾患遺伝子の件数 |
+| `NW_ENRICH_MAX_TERMS` | `50` | 取得するパスウェイ数の上限 |
 | `PPI_CACHE_DIR` | `./ppi_cache` | PPI キャッシュの保存先 |
 | `PPI_CACHE_DISABLED` | 無効 | `1` でディスクキャッシュを無効化 |
 | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `2` / `8` | 常駐時のサーバ規模 |
@@ -221,7 +271,7 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
 | `LOG_LEVEL` | `info` | ログレベル |
 
 外部APIのURL（`OT_API_URL` / `HGNC_API_URL` / `SIGNOR_TSV_URL` / `STRING_URL` /
-`BIOGRID_URL` / `INTACT_URL`）も上書きできます。ミラーの利用やテストに使います。
+`BIOGRID_URL` / `INTACT_URL` / `GPROFILER_URL`）も上書きできます。ミラーの利用やテストに使います。
 
 ## データソース
 
@@ -233,6 +283,7 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
 | [STRING](https://string-db.org/) | 機能的・物理的関連 | 不要 | CC BY 4.0 |
 | [BioGRID](https://thebiogrid.org/) | キュレーション済み相互作用 | **必要** | 非商用・学術利用限定 |
 | [IntAct](https://www.ebi.ac.uk/intact/) | ハブ判定用の相互作用数 | 不要 | CC BY 4.0 |
+| [g:Profiler](https://biit.cs.ut.ee/gprofiler/) | パスウェイ/GO エンリッチメント | 不要 | BSD 2-Clause |
 
 各ソースは best-effort です。1つが落ちても残りで解析を続行し、
 HGNC に到達できない場合も入力シンボルのまま解析を進めます。
@@ -241,13 +292,15 @@ HGNC に到達できない場合も入力シンボルのまま解析を進めま
 
 ```
 app.py                    # Flask ルーティング・入力検証・並列実行
-nw_overlap.py             # NW重複スコア計算
+nw_overlap.py             # 表1: 遺伝子レベルの重複スコア
+enrichment_overlap.py     # 表2: パスウェイレベルの重複スコア
 ppi_network.py            # PPIグラフ構築・パートナーランキング・ハブ判定
 collectors/
 ├── _http.py              # リトライ付き共有 HTTP セッション
 ├── _cache.py             # ディスクキャッシュの場所
 ├── opentargets.py        # 疾患検索・疾患上位遺伝子
 ├── hgnc.py               # HGNC シンボル照合
+├── gprofiler.py          # パスウェイエンリッチメント
 ├── signor.py             # SIGNOR
 ├── string_db.py          # STRING
 └── biogrid.py            # BioGRID
@@ -284,6 +337,8 @@ pytest
 - 遺伝子シンボルは HGNC で照合しますが、別名が複数の遺伝子を指す場合は
   先頭の候補を採用し `candidates` に候補一覧を返します。
 - 結果はキャッシュされないため、同じ問い合わせでも毎回 Open Targets を叩きます
-  （PPI 側はキャッシュされます）。
+  （PPI・エンリッチメント側はキャッシュされます）。
+- 表2は遺伝子ごとに g:Profiler を1回呼ぶため、遺伝子数に比例して解析時間が
+  伸びます。不要な場合は STEP 3 のチェックを外してください。
 - IntAct の相互作用数が取得できない遺伝子はハブ判定の対象外です
   （取得失敗を「ハブでない」とも「ハブである」とも扱いません）。

@@ -12,6 +12,7 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request
 
+from collectors.gprofiler import enrich_gene_list
 from collectors.hgnc import resolve_gene_symbols
 from collectors.opentargets import (
     OpenTargetsError,
@@ -22,6 +23,7 @@ from collectors.opentargets import (
     resolve_disease_id,
     search_diseases,
 )
+from enrichment_overlap import calc_enrichment_overlap
 from nw_overlap import MODERATE_THRESHOLD, STRONG_THRESHOLD, calc_network_overlap
 from ppi_network import (
     DEFAULT_MAX_NODES,
@@ -34,6 +36,10 @@ from ppi_network import (
 DEFAULT_MAX_GENES = 30
 DEFAULT_DISEASE_TOP_N = 100
 DEFAULT_MAX_WORKERS = 5
+# How many of the disease's top genes define the pathway signature. Defaults to
+# the whole disease network, so the two tables describe the same disease.
+DEFAULT_ENRICH_GENE_N = 100
+DEFAULT_ENRICH_MAX_TERMS = 50
 
 VALID_SOURCES = ("signor", "string", "biogrid")
 
@@ -128,6 +134,9 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         MAX_GENES=_env_int("NW_MAX_GENES", DEFAULT_MAX_GENES),
         DISEASE_TOP_N=_env_int("NW_DISEASE_TOP_N", DEFAULT_DISEASE_TOP_N),
         MAX_WORKERS=_env_int("NW_MAX_WORKERS", DEFAULT_MAX_WORKERS),
+        ENRICHMENT=True,
+        ENRICH_GENE_N=_env_int("NW_ENRICH_GENE_N", DEFAULT_ENRICH_GENE_N),
+        ENRICH_MAX_TERMS=_env_int("NW_ENRICH_MAX_TERMS", DEFAULT_ENRICH_MAX_TERMS),
         PPI_DEFAULTS={
             "sources": list(DEFAULT_SOURCES),
             "string_score": _env_int("NW_STRING_SCORE", DEFAULT_STRING_SCORE),
@@ -149,6 +158,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             moderate_threshold=MODERATE_THRESHOLD,
             ppi_defaults=app.config["PPI_DEFAULTS"],
             biogrid_enabled=bool(app.config["BIOGRID_KEY"]),
+            enrichment_default=app.config["ENRICHMENT"],
         )
 
     @app.route("/healthz")
@@ -160,6 +170,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "disease_top_n": app.config["DISEASE_TOP_N"],
                 "biogrid_enabled": bool(app.config["BIOGRID_KEY"]),
                 "ppi_defaults": app.config["PPI_DEFAULTS"],
+                "enrichment": app.config["ENRICHMENT"],
             }
         )
 
@@ -260,6 +271,17 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 404,
             )
 
+        # ── Disease pathway signature: enriched once, shared by every gene.
+        want_enrichment = data.get("enrichment", app.config["ENRICHMENT"])
+        want_enrichment = bool(want_enrichment) and app.config["ENRICHMENT"]
+        disease_pathways: list[dict[str, Any]] = []
+        if want_enrichment:
+            enrich_n = min(app.config["ENRICH_GENE_N"], len(disease_genes))
+            disease_pathways = enrich_gene_list(
+                [g["symbol"] for g in disease_genes[:enrich_n]],
+                max_results=app.config["ENRICH_MAX_TERMS"],
+            )
+
         # ── Genes: map to approved HGNC symbols before analysing.
         if app.config["VALIDATE_SYMBOLS"]:
             resolved = resolve_gene_symbols(genes)
@@ -282,6 +304,15 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 biogrid_api_key=biogrid_key,
             )
             overlap = calc_network_overlap(symbol, ppi["partners"], disease_genes)
+
+            enrichment: dict[str, Any] = {}
+            if want_enrichment and disease_pathways:
+                gene_pathways = enrich_gene_list(
+                    [symbol] + ppi["partners"],
+                    max_results=app.config["ENRICH_MAX_TERMS"],
+                )
+                enrichment = calc_enrichment_overlap(symbol, gene_pathways, disease_pathways)
+
             return {
                 "gene": symbol,
                 "input_gene": entry["input"],
@@ -291,6 +322,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "excluded_hub_count": len(ppi["excluded_hubs"]),
                 "source_counts": ppi["source_counts"],
                 **overlap,
+                **enrichment,
             }
 
         results: list[dict[str, Any]] = []
@@ -320,6 +352,16 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "disease_gene_count": len(disease_genes),
                 "ppi": ppi_options,
                 "genes": {"resolved": resolved, "summary": _symbol_summary(resolved)},
+                "enrichment": {
+                    "enabled": want_enrichment,
+                    "disease_pathway_count": len(disease_pathways),
+                    "disease_gene_n": min(app.config["ENRICH_GENE_N"], len(disease_genes)),
+                    "top_pathways": [
+                        {"term_id": p.get("term_id", ""), "name": p.get("name", ""),
+                         "source": p.get("source", ""), "p_value": p.get("p_value", 1.0)}
+                        for p in disease_pathways[:10]
+                    ],
+                },
                 "results": results,
             }
         )

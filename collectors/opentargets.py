@@ -38,10 +38,29 @@ query SearchEntity($q: String!, $entity: [String!]) {
       name
       entity
       score
+      description
     }
   }
 }
 """
+
+# Same query without `description`, used if that field is ever unavailable so
+# that disease search keeps working against a changed schema.
+SEARCH_QUERY_MINIMAL = """
+query SearchEntity($q: String!, $entity: [String!]) {
+  search(queryString: $q, entityNames: $entity) {
+    hits {
+      id
+      name
+      entity
+      score
+    }
+  }
+}
+"""
+
+# Set once the richer query is known to fail, so the fallback is not re-probed.
+_search_query_supported = True
 
 DISEASE_TOP_GENES_QUERY = """
 query DiseaseTopGenes($efoId: String!, $size: Int!) {
@@ -89,35 +108,80 @@ def _post(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     return payload.get("data") or {}
 
 
+def is_ontology_id(value: str) -> bool:
+    """True when the string already looks like an EFO/MONDO-style ontology id."""
+    return bool(_ONTOLOGY_ID_RE.match((value or "").strip()))
+
+
+def normalise_ontology_id(value: str) -> str:
+    """Canonicalise the casing of an ontology id (``efo_1`` -> ``EFO_1``)."""
+    return (value or "").strip().upper().replace("ORPHANET", "Orphanet")
+
+
+def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Return candidate diseases for a free-text query, best match first.
+
+    Each candidate is ``{"id", "name", "description", "exact"}``, where
+    ``exact`` marks a case-insensitive full-name match. Exact matches are
+    promoted above the search engine's own ranking, so that "Alzheimer disease"
+    does not lose to "Alzheimer disease 2".
+    """
+    global _search_query_supported
+
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    if _search_query_supported:
+        try:
+            data = _post(SEARCH_QUERY, {"q": query, "entity": ["disease"]})
+        except OpenTargetsError:
+            # Retry once without `description`; if that works, stop trying the
+            # richer query for the rest of the process.
+            data = _post(SEARCH_QUERY_MINIMAL, {"q": query, "entity": ["disease"]})
+            _search_query_supported = False
+    else:
+        data = _post(SEARCH_QUERY_MINIMAL, {"q": query, "entity": ["disease"]})
+
+    wanted = query.casefold()
+    candidates: list[dict[str, Any]] = []
+    for hit in (data.get("search") or {}).get("hits") or []:
+        if hit.get("entity") != "disease" or not hit.get("id"):
+            continue
+        name = hit.get("name") or ""
+        candidates.append(
+            {
+                "id": hit["id"],
+                "name": name,
+                "description": (hit.get("description") or "")[:300],
+                "exact": name.casefold() == wanted,
+            }
+        )
+
+    candidates.sort(key=lambda c: not c["exact"])  # stable: exact matches first
+    return candidates[: max(1, int(limit))]
+
+
 def resolve_disease_id(disease_name: str) -> tuple[Optional[str], str]:
     """Resolve a disease name to ``(ontology_id, label)``.
 
-    Returns ``(None, disease_name)`` when nothing matches. An exact
-    case-insensitive name match wins over the search engine's own ranking; a
-    string that already looks like an ontology id is passed straight through.
+    Returns ``(None, disease_name)`` when nothing matches. A string that already
+    looks like an ontology id is passed straight through; otherwise the best
+    search candidate is taken.
     """
     disease_name = (disease_name or "").strip()
     if not disease_name:
         return None, disease_name
 
-    if _ONTOLOGY_ID_RE.match(disease_name):
-        ontology_id = disease_name.upper().replace("ORPHANET", "Orphanet")
+    if is_ontology_id(disease_name):
+        ontology_id = normalise_ontology_id(disease_name)
         label = get_disease_label(ontology_id)
         return ontology_id, label or disease_name
 
-    data = _post(SEARCH_QUERY, {"q": disease_name, "entity": ["disease"]})
-    hits = [
-        hit
-        for hit in (data.get("search") or {}).get("hits") or []
-        if hit.get("entity") == "disease" and hit.get("id")
-    ]
-    if not hits:
+    candidates = search_diseases(disease_name, limit=1)
+    if not candidates:
         return None, disease_name
-
-    wanted = disease_name.casefold()
-    exact = [h for h in hits if (h.get("name") or "").casefold() == wanted]
-    best = exact[0] if exact else hits[0]
-    return best["id"], best.get("name") or disease_name
+    return candidates[0]["id"], candidates[0]["name"] or disease_name
 
 
 def get_disease_label(disease_id: str) -> Optional[str]:
@@ -130,11 +194,13 @@ def get_disease_label(disease_id: str) -> Optional[str]:
     return disease.get("name") if disease else None
 
 
-def get_disease_top_genes(disease_id: str, top_n: int = 100) -> list[dict[str, Any]]:
-    """Return the top ``top_n`` Open Targets associated genes for a disease.
+def get_disease_with_top_genes(
+    disease_id: str, top_n: int = 100
+) -> tuple[str, list[dict[str, Any]]]:
+    """Return ``(disease_label, top_genes)`` in a single API round trip.
 
-    Each entry is ``{"symbol": str, "score": float, "target_id": str}``, ordered
-    by descending association score (the order Open Targets returns them in).
+    The associations query already carries the disease name, so callers that
+    need both do not have to look the label up separately.
     """
     size = max(1, min(int(top_n), MAX_PAGE_SIZE))
     data = _post(DISEASE_TOP_GENES_QUERY, {"efoId": disease_id, "size": size})
@@ -158,4 +224,13 @@ def get_disease_top_genes(disease_id: str, top_n: int = 100) -> list[dict[str, A
                 "target_id": target.get("id", ""),
             }
         )
-    return genes[:size]
+    return disease.get("name") or disease_id, genes[:size]
+
+
+def get_disease_top_genes(disease_id: str, top_n: int = 100) -> list[dict[str, Any]]:
+    """Return the top ``top_n`` Open Targets associated genes for a disease.
+
+    Each entry is ``{"symbol": str, "score": float, "target_id": str}``, ordered
+    by descending association score (the order Open Targets returns them in).
+    """
+    return get_disease_with_top_genes(disease_id, top_n)[1]

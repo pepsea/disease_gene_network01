@@ -1,132 +1,176 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='8' r='4' fill='%232563eb'/%3E%3Ccircle cx='7' cy='23' r='4' fill='%2394a3b8'/%3E%3Ccircle cx='25' cy='23' r='4' fill='%2394a3b8'/%3E%3Cpath d='M16 8L7 23M16 8l9 15M7 23h18' stroke='%232563eb' stroke-width='2' fill='none'/%3E%3C/svg%3E">
 <title>NW重複評価 — Gene–Disease Network Overlap</title>
 <style>
   :root {
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --border: #e2e5ea;
-    --text: #1c2024;
-    --muted: #6b7280;
-    --accent: #2563eb;
-    --strong: #15803d;
-    --moderate: #b45309;
-    --weak: #6b7280;
-    --danger: #b91c1c;
+    --bg:#f6f7f9; --panel:#fff; --border:#e2e5ea; --text:#1c2024; --muted:#6b7280;
+    --accent:#2563eb; --strong:#15803d; --moderate:#b45309; --weak:#6b7280;
+    --danger:#b91c1c; --ok:#15803d; --warn:#b45309; --soft:#f3f4f6;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    padding: 32px 20px 64px;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
-          "Noto Sans JP", Meiryo, sans-serif;
-  }
-  .wrap { max-width: 1040px; margin: 0 auto; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 20px;
-    margin-bottom: 20px;
-  }
-  label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
-  .hint { font-weight: 400; color: var(--muted); }
-  input[type=text], textarea {
-    width: 100%;
-    padding: 9px 11px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font: inherit;
-    background: #fff;
-    color: inherit;
-  }
-  textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
-  .field { margin-bottom: 16px; }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  button {
-    background: var(--accent);
-    color: #fff;
-    border: 0;
-    border-radius: 6px;
-    padding: 10px 20px;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  button:hover:not(:disabled) { background: #1d4ed8; }
-  button:disabled { opacity: .55; cursor: progress; }
-  button.secondary { background: #fff; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-  button.secondary:hover:not(:disabled) { background: #f3f4f6; }
-  #gene-count { font-size: 12px; color: var(--muted); }
-  #gene-count.over { color: var(--danger); font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); background: #fafbfc; }
-  tbody tr:hover { background: #fafbfc; }
-  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .score { font-weight: 700; font-variant-numeric: tabular-nums; }
-  .score.strong { color: var(--strong); }
-  .score.moderate { color: var(--moderate); }
-  .score.weak { color: var(--weak); }
-  .bar { height: 4px; border-radius: 2px; background: #e5e7eb; margin-top: 4px; min-width: 60px; }
-  .bar > span { display: block; height: 100%; border-radius: 2px; background: currentColor; }
-  .partners { font-size: 12px; color: var(--muted); }
-  .err { color: var(--danger); }
-  .meta { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
-  .meta strong { color: var(--text); font-size: 15px; }
-  .legend { font-size: 12px; color: var(--muted); margin-top: 14px; }
-  .legend b { color: var(--text); }
-  .spinner {
-    display: inline-block; width: 14px; height: 14px; border: 2px solid #cbd5e1;
-    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
-    vertical-align: -2px; margin-right: 8px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .table-scroll { overflow-x: auto; }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #14171a; --panel: #1c2024; --border: #2c3238; --text: #e8eaed;
-      --muted: #9aa3ad; --accent: #4b83f0; --strong: #4ade80; --moderate: #fbbf24;
-      --weak: #9aa3ad; --danger: #f87171;
+      --bg:#14171a; --panel:#1c2024; --border:#2c3238; --text:#e8eaed; --muted:#9aa3ad;
+      --accent:#4b83f0; --strong:#4ade80; --moderate:#fbbf24; --weak:#9aa3ad;
+      --danger:#f87171; --ok:#4ade80; --warn:#fbbf24; --soft:#232830;
     }
-    input[type=text], textarea { background: #14171a; }
-    th { background: #191d21; }
-    tbody tr:hover { background: #191d21; }
-    button.secondary:hover:not(:disabled) { background: #232830; }
-    .bar { background: #2c3238; }
   }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 20px 64px;background:var(--bg);color:var(--text);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",Meiryo,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 22px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:18px}
+  .step{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;margin-bottom:10px}
+  label{display:block;font-weight:600;font-size:13px;margin-bottom:6px}
+  .hint{font-weight:400;color:var(--muted)}
+  input[type=text],input[type=number],textarea{width:100%;padding:9px 11px;border:1px solid var(--border);
+    border-radius:6px;font:inherit;background:var(--panel);color:inherit}
+  textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+  input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+  .field{margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:10px 20px;
+    font:inherit;font-weight:600;cursor:pointer}
+  button:hover:not(:disabled){filter:brightness(1.1)}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  button.secondary{background:var(--panel);color:var(--text);border:1px solid var(--border);font-weight:500;padding:8px 14px}
+  button.secondary:hover:not(:disabled){background:var(--soft)}
+  /* disease candidates */
+  .cands{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .cand{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--border);
+    padding:9px 12px;font:inherit;color:inherit;cursor:pointer}
+  .cand:last-child{border-bottom:0}
+  .cand:hover{background:var(--soft)}
+  .cand.sel{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  .cand b{font-weight:600}
+  .cand .id{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace;margin-left:6px}
+  .cand .desc{display:block;color:var(--muted);font-size:12px;margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .picked{margin-top:10px;font-size:13px;padding:8px 12px;border-radius:6px;
+    background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+  /* gene chips */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .chip{font-size:12px;padding:3px 9px;border-radius:20px;border:1px solid var(--border);background:var(--soft)}
+  .chip.approved{border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+  .chip.alias,.chip.previous{border-color:color-mix(in srgb,var(--warn) 55%,transparent);
+    background:color-mix(in srgb,var(--warn) 12%,transparent)}
+  .chip.unknown,.chip.withdrawn{border-color:color-mix(in srgb,var(--danger) 55%,transparent);
+    background:color-mix(in srgb,var(--danger) 12%,transparent)}
+  .chip s{opacity:.65}
+  /* ppi settings */
+  .srcs{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+  .src{display:flex;align-items:center;gap:7px;font-size:14px;font-weight:600;cursor:pointer}
+  .src input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+  .src.off{opacity:.5;cursor:not-allowed}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px}
+  .grid label{margin-bottom:4px}
+  .rng{display:flex;align-items:center;gap:10px}
+  .rng input[type=range]{flex:1;accent-color:var(--accent)}
+  .rng output{font-variant-numeric:tabular-nums;font-weight:600;min-width:42px;text-align:right}
+  .note{font-size:12px;color:var(--muted);margin-top:4px}
+  .chk{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;cursor:pointer;margin-top:22px}
+  .chk input{width:16px;height:16px;accent-color:var(--accent)}
+  /* results */
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);background:var(--soft)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pct{font-weight:700;font-size:15px;font-variant-numeric:tabular-nums}
+  .pct.strong{color:var(--strong)} .pct.moderate{color:var(--moderate)} .pct.weak{color:var(--weak)}
+  .bar{height:4px;border-radius:2px;background:var(--border);margin-top:4px;min-width:64px}
+  .bar>span{display:block;height:100%;border-radius:2px;background:currentColor}
+  .small{font-size:12px;color:var(--muted)}
+  .err{color:var(--danger)}
+  .meta{font-size:13px;color:var(--muted);margin:0 0 14px}
+  .meta strong{color:var(--text);font-size:15px}
+  .legend{font-size:12px;color:var(--muted);margin-top:14px}
+  .legend b{color:var(--text)}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);
+    border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .table-scroll{overflow-x:auto}
 </style>
-</head>
-<body>
+
 <div class="wrap">
   <h1>NW重複評価</h1>
-  <p class="sub">Gene–Disease Network Overlap Evaluator — 遺伝子のPPIネットワークが、疾患のOpen Targets上位遺伝子群をどれだけカバーするかを評価します。</p>
+  <p class="sub">Gene–Disease Network Overlap Evaluator — 遺伝子のPPIネットワークが、疾患ネットワーク（Open Targets 上位遺伝子群）を何％カバーするかを評価します。</p>
+
+  <!-- STEP 1: disease -->
+  <div class="panel">
+    <div class="step">STEP 1 — 疾患を検索して指定</div>
+    <div class="field">
+      <label for="disease">疾患名 <span class="hint">（英語名で検索、または EFO_0000249 のようなIDを直接入力）</span></label>
+      <div class="row">
+        <input id="disease" type="text" placeholder="例: Alzheimer disease" autocomplete="off" style="flex:1;min-width:240px">
+        <button id="search" type="button" class="secondary">Open Targets で検索</button>
+      </div>
+      <div id="cands"></div>
+      <div id="picked"></div>
+    </div>
+  </div>
+
+  <!-- STEP 2: genes -->
+  <div class="panel">
+    <div class="step">STEP 2 — 遺伝子を入力して HGNC 照合</div>
+    <div class="field">
+      <label for="genes">遺伝子リスト <span class="hint">（1行1遺伝子 または カンマ区切り／最大 {{ max_genes }} 件）</span></label>
+      <textarea id="genes" rows="5" placeholder="APP&#10;PSEN1&#10;APOE"></textarea>
+      <div class="row" style="margin-top:8px">
+        <span id="gene-count" class="small">0 件</span>
+        <button id="check" type="button" class="secondary">HGNCシンボルを確認</button>
+      </div>
+      <div id="genechips"></div>
+    </div>
+  </div>
+
+  <!-- STEP 3: PPI -->
+  <div class="panel">
+    <div class="step">STEP 3 — PPI ソースとスコア条件</div>
+    <div class="srcs">
+      <label class="src"><input type="checkbox" id="src-signor" {% if 'signor' in ppi_defaults.sources %}checked{% endif %}> SIGNOR</label>
+      <label class="src"><input type="checkbox" id="src-string" {% if 'string' in ppi_defaults.sources %}checked{% endif %}> STRING</label>
+      <label class="src {% if not biogrid_enabled %}off{% endif %}">
+        <input type="checkbox" id="src-biogrid" {% if not biogrid_enabled %}disabled{% endif %}
+               {% if biogrid_enabled and 'biogrid' in ppi_defaults.sources %}checked{% endif %}> BioGRID
+        {% if not biogrid_enabled %}<span class="hint">（APIキー未設定）</span>{% endif %}
+      </label>
+    </div>
+    <div class="grid">
+      <div>
+        <label for="string-score">STRING 信頼度閾値 <span class="hint">(0–1000)</span></label>
+        <div class="rng">
+          <input type="range" id="string-score" min="0" max="1000" step="50" value="{{ ppi_defaults.string_score }}">
+          <output id="string-score-out">{{ ppi_defaults.string_score }}</output>
+        </div>
+        <div class="note">400=中信頼 / 700=高信頼</div>
+      </div>
+      <div>
+        <label for="min-score">共通スコア下限 <span class="hint">(0–1、空欄で無効)</span></label>
+        <input type="number" id="min-score" min="0" max="1" step="0.05" placeholder="適用しない">
+        <div class="note">全ソース共通のエッジスコア下限</div>
+      </div>
+      <div>
+        <label for="hub-threshold">ハブ判定の相互作用数</label>
+        <input type="number" id="hub-threshold" min="1" step="100" value="{{ ppi_defaults.hub_threshold }}">
+        <div class="note">これを超える遺伝子は非特異ハブとして除外</div>
+      </div>
+      <div>
+        <label for="max-nodes">PPIパートナー上限</label>
+        <input type="number" id="max-nodes" min="1" max="500" step="10" value="{{ ppi_defaults.max_nodes }}">
+        <div class="note">ランキング上位から採用</div>
+      </div>
+      <div>
+        <label class="chk"><input type="checkbox" id="exclude-hubs" checked> ハブ遺伝子を除外する</label>
+        <div class="note">ユビキチン・アクチン等の非特異ハブ族も併せて除外</div>
+      </div>
+    </div>
+  </div>
 
   <div class="panel">
-    <form id="form">
-      <div class="field">
-        <label for="disease">疾患名 <span class="hint">（英語名、または EFO_0000249 のようなオントロジーID）</span></label>
-        <input id="disease" type="text" placeholder="例: Alzheimer disease" required autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="genes">遺伝子リスト <span class="hint">（1行1遺伝子 または カンマ区切り／最大 {{ max_genes }} 件）</span></label>
-        <textarea id="genes" rows="6" placeholder="APP&#10;PSEN1&#10;APOE" required></textarea>
-        <div id="gene-count">0 件</div>
-      </div>
-      <div class="row">
-        <button id="submit" type="submit">解析実行</button>
-        <button id="download" type="button" class="secondary" hidden>CSVダウンロード</button>
-      </div>
-    </form>
+    <div class="row">
+      <button id="run" type="button">解析実行</button>
+      <button id="download" type="button" class="secondary" hidden>CSVダウンロード</button>
+    </div>
   </div>
 
   <div id="result"></div>
@@ -138,144 +182,261 @@ const STRONG = {{ strong_threshold }};
 const MODERATE = {{ moderate_threshold }};
 
 const $ = (id) => document.getElementById(id);
+let picked = null;      // {id, name}
 let lastData = null;
 
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 function parseGenes(raw) {
-  const seen = new Set();
-  const genes = [];
-  for (const token of raw.split(/[\s,;]+/)) {
-    const g = token.trim();
+  const seen = new Set(), out = [];
+  for (const t of raw.split(/[\s,;]+/)) {
+    const g = t.trim();
     if (!g || seen.has(g.toUpperCase())) continue;
     seen.add(g.toUpperCase());
-    genes.push(g);
+    out.push(g);
   }
-  return genes;
+  return out;
 }
 
 function updateCount() {
   const n = parseGenes($("genes").value).length;
   const el = $("gene-count");
   el.textContent = n + " 件" + (n > MAX_GENES ? "（上限 " + MAX_GENES + " 件を超えています）" : "");
-  el.classList.toggle("over", n > MAX_GENES);
+  el.style.color = n > MAX_GENES ? "var(--danger)" : "";
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function showError(msg) {
+  $("result").innerHTML = '<div class="panel"><p class="err">' + esc(msg) + "</p></div>";
 }
 
-function band(score) {
-  if (score >= STRONG) return "strong";
-  if (score >= MODERATE) return "moderate";
-  return "weak";
-}
+// ── STEP 1: disease search ────────────────────────────────────────────────
+async function searchDisease() {
+  const q = $("disease").value.trim();
+  if (!q) return;
+  $("search").disabled = true;
+  $("cands").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>検索中…</p>';
+  $("picked").innerHTML = "";
+  picked = null;
+  try {
+    const res = await fetch("/api/diseases?q=" + encodeURIComponent(q));
+    const data = await res.json();
+    if (!res.ok || data.error) { $("cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>"; return; }
+    if (!data.results.length) { $("cands").innerHTML = '<p class="err small">該当する疾患が見つかりません: ' + esc(q) + "</p>"; return; }
 
-function render(data) {
-  const bandLabel = { strong: "強い関連", moderate: "中程度", weak: "関連が薄い" };
-  let html = '<div class="panel">';
-  html += '<p class="meta"><strong>' + escapeHtml(data.disease_label) + "</strong>（"
-        + escapeHtml(data.disease_id) + "）— 疾患上位遺伝子 " + data.disease_gene_count
-        + " 件／PPIパートナー上限 " + data.ppi_top_n + " 件</p>";
-  html += '<div class="table-scroll"><table><thead><tr>'
-        + "<th>遺伝子</th><th>加重スコア</th><th>単純重複率</th><th>重複数</th>"
-        + "<th>ターゲット自身</th><th>重複遺伝子（上位5件）</th>"
-        + "</tr></thead><tbody>";
-
-  for (const r of data.results) {
-    if (r.error) {
-      html += "<tr><td><strong>" + escapeHtml(r.gene) + "</strong></td>"
-            + '<td colspan="5" class="err">' + escapeHtml(r.error) + "</td></tr>";
-      continue;
+    let html = '<div class="cands">';
+    data.results.forEach((r, i) => {
+      html += '<button type="button" class="cand" data-i="' + i + '">'
+        + "<b>" + esc(r.name) + '</b><span class="id">' + esc(r.id) + "</span>"
+        + (r.exact ? ' <span class="small">— 完全一致</span>' : "")
+        + (r.description ? '<span class="desc">' + esc(r.description) + "</span>" : "")
+        + "</button>";
+    });
+    html += "</div>";
+    $("cands").innerHTML = html;
+    $("cands").querySelectorAll(".cand").forEach((btn) => {
+      btn.addEventListener("click", () => selectDisease(data.results[+btn.dataset.i], btn));
+    });
+    if (data.results.length === 1 || data.results[0].exact) {
+      selectDisease(data.results[0], $("cands").querySelector(".cand"));
     }
-    const cls = band(r.weighted_score);
-    const pct = Math.min(100, r.weighted_score * 100);
-    const selfMark = r.target_self
-      ? "★ " + escapeHtml(r.target_self) + " (" + Number(r.target_self_score).toFixed(3) + ")"
-      : "—";
-    const top = (r.overlapping_genes || []).slice(0, 5)
-      .map((g) => escapeHtml(g.symbol) + "(" + Number(g.score).toFixed(3) + ")").join(", ");
-    const more = (r.overlapping_genes || []).length - 5;
-
-    html += "<tr>"
-      + "<td><strong>" + escapeHtml(r.gene) + "</strong></td>"
-      + '<td class="num"><span class="score ' + cls + '">' + r.weighted_score.toFixed(3) + "</span>"
-      + '<div class="bar ' + cls + '" style="color:var(--' + cls + ')"><span style="width:' + pct + '%"></span></div>'
-      + '<div class="partners">' + bandLabel[cls] + "</div></td>"
-      + '<td class="num">' + (r.simple_ratio * 100).toFixed(1) + "%</td>"
-      + '<td class="num">' + r.overlap_count + " / " + r.ppi_partner_count + " PPI</td>"
-      + '<td class="num">' + selfMark + "</td>"
-      + '<td class="partners">' + (top || "—") + (more > 0 ? " …他" + more + "件" : "") + "</td>"
-      + "</tr>";
+  } catch (e) {
+    $("cands").innerHTML = '<p class="err small">通信エラー: ' + esc(e.message) + "</p>";
+  } finally {
+    $("search").disabled = false;
   }
-  html += "</tbody></table></div>";
-  html += '<p class="legend"><b>加重スコア</b> = （重複遺伝子のOTスコア合計 ＋ ターゲット自身のOTスコア）÷ 疾患遺伝子のOTスコア合計。'
-        + " ≥ " + STRONG + " 強い関連／" + MODERATE + "〜" + STRONG + " 中程度／< " + MODERATE
-        + " 関連が薄い（またはPPI情報不足）。</p>";
-  html += "</div>";
-  $("result").innerHTML = html;
 }
 
-function toCsv(data) {
-  const rows = [["gene", "weighted_score", "simple_ratio", "overlap_count",
-                 "ppi_partner_count", "disease_gene_count", "target_self",
-                 "target_self_score", "overlapping_genes", "error"]];
-  for (const r of data.results) {
-    rows.push([
-      r.gene, r.weighted_score ?? "", r.simple_ratio ?? "", r.overlap_count ?? "",
-      r.ppi_partner_count ?? "", r.disease_gene_count ?? "", r.target_self ?? "",
-      r.target_self_score ?? "",
-      (r.overlapping_genes || []).map((g) => g.symbol + "(" + g.score + ")").join(" "),
-      r.error ?? "",
-    ]);
-  }
-  return rows.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
+function selectDisease(r, btn) {
+  picked = { id: r.id, name: r.name };
+  $("cands").querySelectorAll(".cand").forEach((b) => b.classList.remove("sel"));
+  if (btn) btn.classList.add("sel");
+  $("picked").innerHTML = '<div class="picked">選択中: <b>' + esc(r.name) + "</b>（" + esc(r.id) + "）</div>";
 }
 
-async function runAnalysis(e) {
-  e.preventDefault();
-  const disease = $("disease").value.trim();
+// ── STEP 2: HGNC validation ───────────────────────────────────────────────
+const STATUS_LABEL = {
+  approved: "承認シンボル", alias: "別名", previous: "旧シンボル",
+  withdrawn: "廃止", unknown: "HGNC未登録", unverified: "照合できず",
+};
+
+async function checkGenes() {
   const genes = parseGenes($("genes").value);
-
-  if (!disease || genes.length === 0) {
-    $("result").innerHTML = '<div class="panel"><p class="err">疾患名と遺伝子リストの両方を入力してください。</p></div>';
-    return;
-  }
+  if (!genes.length) { $("genechips").innerHTML = ""; return null; }
   if (genes.length > MAX_GENES) {
-    $("result").innerHTML = '<div class="panel"><p class="err">遺伝子は最大 ' + MAX_GENES
-      + " 件までです（" + genes.length + " 件入力されています）。</p></div>";
-    return;
+    $("genechips").innerHTML = '<p class="err small">遺伝子は最大 ' + MAX_GENES + " 件までです。</p>";
+    return null;
   }
+  $("check").disabled = true;
+  $("genechips").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>HGNC照合中…</p>';
+  try {
+    const res = await fetch("/api/genes/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ genes }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) { $("genechips").innerHTML = '<p class="err small">' + esc(data.error || "照合に失敗しました") + "</p>"; return null; }
+    renderChips(data);
+    return data;
+  } catch (e) {
+    $("genechips").innerHTML = '<p class="err small">通信エラー: ' + esc(e.message) + "</p>";
+    return null;
+  } finally {
+    $("check").disabled = false;
+  }
+}
 
-  $("submit").disabled = true;
+function renderChips(data) {
+  let html = '<div class="chips">';
+  for (const g of data.genes) {
+    const changed = g.symbol.toUpperCase() !== g.input.toUpperCase();
+    html += '<span class="chip ' + esc(g.status) + '" title="' + esc(g.name || "") + '">'
+      + (changed ? "<s>" + esc(g.input) + "</s> → <b>" + esc(g.symbol) + "</b>" : "<b>" + esc(g.symbol) + "</b>")
+      + " <span class=\"small\">" + (STATUS_LABEL[g.status] || g.status) + "</span></span>";
+  }
+  html += "</div>";
+  const parts = Object.entries(data.summary).map(([k, v]) => (STATUS_LABEL[k] || k) + " " + v + "件");
+  html += '<p class="small" style="margin:8px 0 0">' + esc(parts.join(" / ")) + "</p>";
+  $("genechips").innerHTML = html;
+}
+
+// ── STEP 3 + run ──────────────────────────────────────────────────────────
+function ppiOptions() {
+  const sources = [];
+  if ($("src-signor").checked) sources.push("signor");
+  if ($("src-string").checked) sources.push("string");
+  if ($("src-biogrid").checked) sources.push("biogrid");
+  const minRaw = $("min-score").value.trim();
+  return {
+    sources,
+    string_score: +$("string-score").value,
+    min_score: minRaw === "" ? null : +minRaw,
+    hub_threshold: +$("hub-threshold").value,
+    max_nodes: +$("max-nodes").value,
+    exclude_hubs: $("exclude-hubs").checked,
+  };
+}
+
+async function run() {
+  const genes = parseGenes($("genes").value);
+  const typed = $("disease").value.trim();
+  if (!typed && !picked) { showError("疾患を検索して選択してください。"); return; }
+  if (!genes.length) { showError("遺伝子リストを入力してください。"); return; }
+  if (genes.length > MAX_GENES) { showError("遺伝子は最大 " + MAX_GENES + " 件までです（" + genes.length + " 件入力されています）。"); return; }
+
+  const ppi = ppiOptions();
+  if (!ppi.sources.length) { showError("PPIソースを1つ以上選択してください。"); return; }
+
+  $("run").disabled = true;
   $("download").hidden = true;
   $("result").innerHTML = '<div class="panel"><span class="spinner"></span>'
     + genes.length + " 遺伝子を解析中…（PPI取得に時間がかかる場合があります）</div>";
 
+  const body = { genes, ppi };
+  if (picked) { body.disease_id = picked.id; body.disease = picked.name; }
+  else { body.disease = typed; }
+
   try {
     const res = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ disease, genes }),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok || data.error) {
-      $("result").innerHTML = '<div class="panel"><p class="err">'
-        + escapeHtml(data.error || ("解析に失敗しました (HTTP " + res.status + ")")) + "</p></div>";
+      showError(data.error || ("解析に失敗しました (HTTP " + res.status + ")"));
       return;
     }
     lastData = data;
     render(data);
     $("download").hidden = false;
-  } catch (err) {
-    $("result").innerHTML = '<div class="panel"><p class="err">通信エラー: '
-      + escapeHtml(err.message) + "</p></div>";
+  } catch (e) {
+    showError("通信エラー: " + e.message);
   } finally {
-    $("submit").disabled = false;
+    $("run").disabled = false;
   }
 }
 
-$("form").addEventListener("submit", runAnalysis);
+function band(score) { return score >= STRONG ? "strong" : score >= MODERATE ? "moderate" : "weak"; }
+
+function render(data) {
+  const LABEL = { strong: "強い関連", moderate: "中程度", weak: "関連が薄い" };
+  let html = '<div class="panel">';
+  html += '<p class="meta"><strong>' + esc(data.disease_label) + "</strong>（" + esc(data.disease_id)
+        + "）— 疾患ネットワーク " + data.disease_gene_count + " 遺伝子"
+        + " ／ PPIソース: " + esc(data.ppi.sources.join(", ").toUpperCase() || "—")
+        + "（STRING閾値 " + data.ppi.string_score
+        + (data.ppi.min_score != null ? " / スコア下限 " + data.ppi.min_score : "")
+        + (data.ppi.exclude_hubs ? " / ハブ除外 " + data.ppi.hub_threshold : " / ハブ除外なし") + "）</p>";
+  if (data.ppi.biogrid_skipped) {
+    html += '<p class="small err">BioGRID はAPIキー未設定のためスキップされました。</p>';
+  }
+
+  html += '<div class="table-scroll"><table><thead><tr>'
+        + "<th>遺伝子</th><th>加重重複率<br><span class=\"small\">スコア加重</span></th>"
+        + "<th>単純重複率<br><span class=\"small\">遺伝子数ベース</span></th>"
+        + "<th>重複遺伝子数</th><th>ターゲット自身</th><th>重複遺伝子（上位5件）</th>"
+        + "</tr></thead><tbody>";
+
+  for (const r of data.results) {
+    const nameCell = "<b>" + esc(r.gene) + "</b>"
+      + (r.input_gene && r.input_gene.toUpperCase() !== r.gene.toUpperCase()
+          ? '<div class="small">入力: ' + esc(r.input_gene) + "</div>" : "")
+      + (r.symbol_status && r.symbol_status !== "approved"
+          ? '<div class="small">' + esc(STATUS_LABEL[r.symbol_status] || r.symbol_status) + "</div>" : "");
+
+    if (r.error) {
+      html += "<tr><td>" + nameCell + '</td><td colspan="5" class="err">' + esc(r.error) + "</td></tr>";
+      continue;
+    }
+    const cls = band(r.weighted_score);
+    html += "<tr>"
+      + "<td>" + nameCell + "</td>"
+      + '<td class="num"><span class="pct ' + cls + '">' + r.weighted_percent.toFixed(1) + "%</span>"
+      + '<div class="bar" style="color:var(--' + cls + ')"><span style="width:'
+      + Math.min(100, r.weighted_percent) + '%"></span></div>'
+      + '<div class="small">' + LABEL[cls] + "</div></td>"
+      + '<td class="num"><span class="pct">' + r.overlap_percent.toFixed(1) + "%</span>"
+      + '<div class="small">' + r.matched_count + " / " + r.disease_gene_count + " 疾患遺伝子</div></td>"
+      + '<td class="num">' + r.overlap_count + " / " + r.ppi_partner_count + " PPI"
+      + (r.excluded_hub_count ? '<div class="small">ハブ除外 ' + r.excluded_hub_count + "</div>" : "") + "</td>"
+      + '<td class="num">' + (r.target_self
+          ? "★ " + esc(r.target_self) + " (" + Number(r.target_self_score).toFixed(3) + ")" : "—") + "</td>"
+      + '<td class="small">' + ((r.overlapping_genes || []).slice(0, 5)
+          .map((g) => esc(g.symbol) + "(" + Number(g.score).toFixed(3) + ")").join(", ") || "—")
+      + ((r.overlapping_genes || []).length > 5 ? " …他" + ((r.overlapping_genes.length) - 5) + "件" : "") + "</td>"
+      + "</tr>";
+  }
+  html += "</tbody></table></div>";
+  html += '<p class="legend"><b>加重重複率</b> = （重複遺伝子のOTスコア合計 ＋ ターゲット自身のOTスコア）÷ 疾患ネットワーク全体のOTスコア合計。'
+        + " ≥ " + (STRONG * 100) + "% 強い関連／" + (MODERATE * 100) + "〜" + (STRONG * 100)
+        + "% 中程度／< " + (MODERATE * 100) + "% 関連が薄い。<br>"
+        + "<b>単純重複率</b> = 重複した疾患遺伝子数 ÷ 疾患ネットワークの遺伝子数（スコア非加重）。</p>";
+  html += "</div>";
+  $("result").innerHTML = html;
+}
+
+function toCsv(d) {
+  const rows = [["gene", "input_gene", "symbol_status", "hgnc_id", "weighted_percent",
+                 "overlap_percent", "matched_count", "overlap_count", "ppi_partner_count",
+                 "disease_gene_count", "target_self", "target_self_score",
+                 "overlapping_genes", "error"]];
+  for (const r of d.results) {
+    rows.push([r.gene, r.input_gene ?? "", r.symbol_status ?? "", r.hgnc_id ?? "",
+      r.weighted_percent ?? "", r.overlap_percent ?? "", r.matched_count ?? "",
+      r.overlap_count ?? "", r.ppi_partner_count ?? "", r.disease_gene_count ?? "",
+      r.target_self ?? "", r.target_self_score ?? "",
+      (r.overlapping_genes || []).map((g) => g.symbol + "(" + g.score + ")").join(" "),
+      r.error ?? ""]);
+  }
+  return rows.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
+}
+
+$("search").addEventListener("click", searchDisease);
+$("disease").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); searchDisease(); } });
+$("check").addEventListener("click", checkGenes);
+$("run").addEventListener("click", run);
 $("genes").addEventListener("input", updateCount);
+$("string-score").addEventListener("input", () => { $("string-score-out").value = $("string-score").value; });
 $("download").addEventListener("click", () => {
   if (!lastData) return;
   const blob = new Blob(["﻿" + toCsv(lastData)], { type: "text/csv;charset=utf-8" });
@@ -287,5 +448,3 @@ $("download").addEventListener("click", () => {
 });
 updateCount();
 </script>
-</body>
-</html>

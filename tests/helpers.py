@@ -6,10 +6,14 @@ from typing import Any
 
 
 class FakeResponse:
-    def __init__(self, payload: Any = None, status: int = 200, text: str | None = None):
+    def __init__(self, payload: Any = None, status: int = 200, text: str | None = None,
+                 body: str | None = None):
         self._payload = payload
         self.status_code = status
         self._text = text
+        # `body` is the raw response text (for TSV endpoints); `text` is JSON
+        # source that .json() should parse, so bad JSON can be simulated.
+        self.text = body if body is not None else (text or "")
 
     def raise_for_status(self):
         if self.status_code >= 400:

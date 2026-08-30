@@ -43,11 +43,14 @@ def calc_network_overlap(
             Targets, ordered by descending association score.
 
     Returns:
-        A dict with ``weighted_score``, ``simple_ratio``, ``overlap_count``,
-        ``disease_gene_count``, ``ppi_partner_count``, ``target_self`` (the
-        symbol when the target is itself a disease gene, else ``None``),
-        ``target_self_score``, ``overlapping_genes`` (score-sorted) and
-        ``interpretation``.
+        A dict with ``weighted_score`` and ``weighted_percent`` (the share of
+        the disease network's total OT score that the neighbourhood covers),
+        ``simple_ratio`` and ``overlap_percent`` (the share of disease genes
+        matched, unweighted), ``overlap_count``, ``matched_count`` (overlap plus
+        the target itself), ``disease_gene_count``, ``ppi_partner_count``,
+        ``target_self`` (the symbol when the target is itself a disease gene,
+        else ``None``), ``target_self_score``, ``overlapping_genes``
+        (score-sorted) and ``interpretation``.
     """
     target = (gene or "").strip().upper()
 
@@ -86,8 +89,12 @@ def calc_network_overlap(
 
     return {
         "weighted_score": weighted_score,
+        # Share of the disease network covered, as a percentage.
+        "weighted_percent": round(weighted_score * 100, 1),
         "simple_ratio": simple_ratio,
+        "overlap_percent": round(simple_ratio * 100, 1),
         "overlap_count": len(overlap),
+        "matched_count": simple_n,
         "disease_gene_count": len(disease_genes),
         "ppi_partner_count": len(ppi_set),
         "target_self": gene.strip() if self_entry else None,

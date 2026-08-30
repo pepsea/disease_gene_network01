@@ -13,3 +13,4 @@ README.md
 .env
 *.md
 .DS_Store
+ppi_cache/

@@ -14,13 +14,18 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py gunicorn.conf.py ./
+COPY app.py gunicorn.conf.py nw_overlap.py ppi_network.py ./
 COPY collectors/ ./collectors/
 COPY templates/ ./templates/
-COPY nw_overlap.py ./
+
+# Cache directory for the SIGNOR bulk download, STRING per-gene results and
+# IntAct interactor counts. Mount it as a volume to keep it across restarts.
+ENV PPI_CACHE_DIR=/app/ppi_cache
 
 # Run as an unprivileged user.
-RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+RUN useradd --create-home --uid 10001 appuser \
+ && mkdir -p /app/ppi_cache \
+ && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 5005

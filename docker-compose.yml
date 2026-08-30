@@ -14,9 +14,15 @@ services:
       NW_DISEASE_TOP_N: "${NW_DISEASE_TOP_N:-100}"
       NW_PPI_TOP_N: "${NW_PPI_TOP_N:-30}"
       NW_MAX_WORKERS: "${NW_MAX_WORKERS:-5}"
+      NW_STRING_SCORE: "${NW_STRING_SCORE:-700}"
+      NW_HUB_THRESHOLD: "${NW_HUB_THRESHOLD:-1000}"
+      NW_MAX_NODES: "${NW_MAX_NODES:-100}"
       GUNICORN_WORKERS: "${GUNICORN_WORKERS:-2}"
       GUNICORN_THREADS: "${GUNICORN_THREADS:-8}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+    volumes:
+      # Keeps the SIGNOR/STRING/IntAct caches across restarts and rebuilds.
+      - ppi-cache:/app/ppi_cache
     healthcheck:
       test:
         - CMD
@@ -34,3 +40,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  ppi-cache:

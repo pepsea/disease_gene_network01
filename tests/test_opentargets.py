@@ -142,3 +142,87 @@ def test_unknown_disease_id_raises(monkeypatch):
 def test_disease_with_no_associations_returns_empty(monkeypatch):
     monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(genes_payload([]))))
     assert ot.get_disease_top_genes("EFO_1") == []
+
+
+# --- search_diseases -------------------------------------------------------
+
+def test_search_returns_candidates_with_exact_first(monkeypatch):
+    hits = [
+        {"id": "EFO_1", "name": "Alzheimer disease 2", "entity": "disease", "description": "d2"},
+        {"id": "EFO_0000249", "name": "Alzheimer disease", "entity": "disease", "description": "d1"},
+    ]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(search_payload(hits))))
+    results = ot.search_diseases("alzheimer disease")
+    assert [r["id"] for r in results] == ["EFO_0000249", "EFO_1"]
+    assert results[0]["exact"] is True
+    assert results[0]["description"] == "d1"
+
+
+def test_search_preserves_ranking_when_nothing_matches_exactly(monkeypatch):
+    hits = [
+        {"id": "EFO_1", "name": "Alzheimer disease 2", "entity": "disease"},
+        {"id": "EFO_2", "name": "Alzheimer disease 3", "entity": "disease"},
+    ]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(search_payload(hits))))
+    assert [r["id"] for r in ot.search_diseases("alzheimer")] == ["EFO_1", "EFO_2"]
+
+
+def test_search_drops_non_disease_entities(monkeypatch):
+    hits = [
+        {"id": "ENSG1", "name": "APP", "entity": "target"},
+        {"id": "EFO_1", "name": "amyloidosis", "entity": "disease"},
+    ]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(search_payload(hits))))
+    assert [r["id"] for r in ot.search_diseases("APP")] == ["EFO_1"]
+
+
+def test_search_respects_the_limit(monkeypatch):
+    hits = [{"id": f"EFO_{i}", "name": f"d{i}", "entity": "disease"} for i in range(20)]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(search_payload(hits))))
+    assert len(ot.search_diseases("d", limit=5)) == 5
+
+
+def test_search_of_a_blank_query_makes_no_request(monkeypatch):
+    session = FakeSession(post=FakeResponse(search_payload([])))
+    monkeypatch.setattr(ot, "SESSION", session)
+    assert ot.search_diseases("   ") == []
+    assert session.post_calls == []
+
+
+def test_search_falls_back_when_description_is_unsupported(monkeypatch):
+    """A schema without `description` must not break disease search."""
+    calls = []
+
+    def handler(url, **kwargs):
+        query = kwargs["json"]["query"]
+        calls.append(query)
+        if "description" in query:
+            return FakeResponse({"errors": [{"message": "Cannot query field description"}]})
+        return FakeResponse(search_payload(
+            [{"id": "EFO_1", "name": "Alzheimer disease", "entity": "disease"}]))
+
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=handler))
+    monkeypatch.setattr(ot, "_search_query_supported", True)
+
+    assert [r["id"] for r in ot.search_diseases("alzheimer")] == ["EFO_1"]
+    assert len(calls) == 2  # rich query, then the minimal one
+
+    # The richer query is not retried afterwards.
+    ot.search_diseases("alzheimer")
+    assert len(calls) == 3
+
+
+def test_ontology_id_helpers():
+    assert ot.is_ontology_id("EFO_0000249")
+    assert ot.is_ontology_id("mondo_0004975")
+    assert not ot.is_ontology_id("Alzheimer disease")
+    assert ot.normalise_ontology_id("efo_0000249") == "EFO_0000249"
+    assert ot.normalise_ontology_id("orphanet_123") == "Orphanet_123"
+
+
+def test_get_disease_with_top_genes_returns_the_label(monkeypatch):
+    rows = [row("APP", 0.9)]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(genes_payload(rows))))
+    label, genes = ot.get_disease_with_top_genes("EFO_0000249")
+    assert label == "Alzheimer disease"
+    assert [g["symbol"] for g in genes] == ["APP"]

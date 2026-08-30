@@ -8,14 +8,41 @@
 - **解析**: 遺伝子ごとに PPI パートナーを収集 → 疾患上位遺伝子との重複を加重スコア化
 - **アウトプット**: 遺伝子ごとのスコア・重複遺伝子リストのテーブル（CSV 出力可）
 
-## セットアップ
+## Docker で常駐させる（推奨）
 
 ```bash
-pip install -r requirements.txt
-python app.py
+cp .env.example .env      # 必要に応じて編集（BioGRID キーなど）
+docker compose up -d --build
 ```
 
 http://127.0.0.1:5005 を開きます。
+
+`restart: unless-stopped` を設定しているため、コンテナが落ちた場合もホストを
+再起動した場合も自動で復帰します（`docker compose down` で明示的に停止した
+場合は復帰しません）。
+
+```bash
+docker compose ps                  # 稼働状態と healthcheck の結果
+docker compose logs -f             # ログ追尾
+docker compose restart             # 再起動
+docker compose up -d --build       # コード更新後の再デプロイ
+docker compose down                # 停止・削除（常駐解除）
+```
+
+ヘルスチェックは 30 秒間隔で `/healthz` を叩き、`docker compose ps` の
+`STATUS` 列に `healthy` / `unhealthy` として出ます。ログは 10MB × 3 世代で
+ローテートするため、常駐させてもディスクを圧迫しません。
+
+ポートを変えたい場合は `.env` の `HOST_PORT` を変更します
+（コンテナ内は常に 5005 を listen します）。
+
+### ローカルで直接動かす場合
+
+```bash
+pip install -r requirements.txt
+python app.py                                  # 開発用サーバ
+gunicorn -c gunicorn.conf.py app:app           # 本番同等
+```
 
 ## 設定（環境変数）
 
@@ -29,7 +56,12 @@ http://127.0.0.1:5005 を開きます。
 | `NW_PPI_TOP_N` | `30` | 遺伝子あたりの PPI パートナー上限 |
 | `NW_MAX_WORKERS` | `5` | 並列ワーカー数 |
 | `NW_ENABLE_SIGNOR` / `NW_ENABLE_STRING` | 有効 | 個別のデータソースを無効化する場合に `0` |
-| `FLASK_DEBUG` | 無効 | `1` でデバッグモード |
+| `FLASK_DEBUG` | 無効 | `1` でデバッグモード（`python app.py` 使用時のみ） |
+| `HOST_PORT` | `5005` | Docker でホスト側に公開するポート |
+| `GUNICORN_WORKERS` | `2` | gunicorn ワーカープロセス数 |
+| `GUNICORN_THREADS` | `8` | ワーカーあたりのスレッド数 |
+| `GUNICORN_TIMEOUT` | `300` | リクエストタイムアウト（秒） |
+| `LOG_LEVEL` | `info` | gunicorn のログレベル |
 
 ## スコアの定義
 
@@ -124,8 +156,24 @@ collectors/
 ├── opentargets.py        # 疾患ID解決・疾患上位遺伝子取得
 └── ppi.py                # SIGNOR / STRING / BioGRID からの PPI 収集
 templates/index.html      # フロントエンド（単一ファイル）
+gunicorn.conf.py          # 常駐時のサーバ設定
+Dockerfile                # 実行イメージ
+docker-compose.yml        # 常駐運用（restart / healthcheck / ログ回転）
 tests/                    # pytest（外部APIはモック）
 ```
+
+## 常駐時のチューニング
+
+処理は外部APIへの待ち時間が支配的な IO バウンドのため、並行数はプロセスでは
+なくスレッドで確保しています（`gthread` ワーカー）。
+
+SIGNOR の索引は**プロセスごと**に保持されるため、`GUNICORN_WORKERS` を増やす
+とその分だけ一括ダウンロードが発生します。まず `GUNICORN_THREADS` を増やし、
+ワーカー数は必要な場合だけ増やしてください。索引を1つに保ちたい場合は
+`GUNICORN_WORKERS=1` にします。
+
+`GUNICORN_TIMEOUT` は既定で 300 秒です。初回リクエストは SIGNOR の一括取得
+（最大 120 秒）を含むため、これを大きく下回る値にしないでください。
 
 ## テスト
 

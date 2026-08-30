@@ -1,0 +1,36 @@
+services:
+  nw-overlap:
+    build: .
+    image: nw-overlap-app:latest
+    container_name: nw-overlap-app
+    # Restart on failure and come back automatically after a host reboot.
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-5005}:5005"
+    environment:
+      # Optional: enables the BioGRID source when set.
+      BIOGRID_KEY: "${BIOGRID_KEY:-}"
+      NW_MAX_GENES: "${NW_MAX_GENES:-30}"
+      NW_DISEASE_TOP_N: "${NW_DISEASE_TOP_N:-100}"
+      NW_PPI_TOP_N: "${NW_PPI_TOP_N:-30}"
+      NW_MAX_WORKERS: "${NW_MAX_WORKERS:-5}"
+      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-2}"
+      GUNICORN_THREADS: "${GUNICORN_THREADS:-8}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:5005/healthz", timeout=5).status == 200 else 1)
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

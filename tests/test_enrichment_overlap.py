@@ -54,11 +54,54 @@ def test_target_fit_is_case_insensitive():
     assert calc_enrichment_overlap("app", [], DISEASE)["target_in_pathway_count"] == 2
 
 
-def test_target_fit_is_independent_of_network_overlap():
-    """A gene can sit in the disease pathways while its network covers none."""
+def test_the_target_counts_even_when_its_network_covers_nothing():
+    """The target's own pathway membership counts, as its OT score does in table 1.
+
+    A single gene rarely yields a significant enrichment term, so relying on the
+    enrichment alone would silently drop the target's own contribution.
+    """
     r = calc_enrichment_overlap("APP", [], DISEASE)
-    assert r["pathway_overlap_percent"] == 0.0
-    assert r["target_fit_percent"] == 66.7
+    assert r["pathway_overlap_count"] == 0       # nothing came from the network
+    assert r["target_in_pathway_count"] == 2     # but APP is in two disease pathways
+    assert r["pathway_matched_count"] == 2       # so two are covered in total
+    assert r["pathway_overlap_percent"] == 66.7
+    assert r["pathway_weighted_percent"] == 93.8  # 15 of 16 weight
+    assert [p["via"] for p in r["overlapping_pathways"]] == ["target", "target"]
+
+
+def test_network_and_target_hits_are_unioned():
+    """Covered = reached by the network OR by the target itself."""
+    gene = [{"term_id": "WP:1", "p_value": 0.01}]   # network reaches only the weak term
+    r = calc_enrichment_overlap("APP", gene, DISEASE)
+    assert r["pathway_overlap_count"] == 1        # WP:1 via the network
+    assert r["target_in_pathway_count"] == 2      # R-HSA-1 and GO:1 via APP itself
+    assert r["pathway_matched_count"] == 3        # all three, no overlap between them
+    assert r["pathway_overlap_percent"] == 100.0
+    assert {p["term_id"]: p["via"] for p in r["overlapping_pathways"]} == {
+        "R-HSA-1": "target", "GO:1": "target", "WP:1": "network"}
+
+
+def test_a_pathway_reached_both_ways_is_counted_once():
+    gene = [{"term_id": "R-HSA-1", "p_value": 0.01}]   # also contains APP
+    r = calc_enrichment_overlap("APP", gene, DISEASE)
+    assert r["pathway_matched_count"] == 2          # R-HSA-1 and GO:1, not three
+    assert len(r["overlapping_pathways"]) == 2
+    via = {p["term_id"]: p["via"] for p in r["overlapping_pathways"]}
+    assert via["R-HSA-1"] == "both"
+    assert via["GO:1"] == "target"
+
+
+def test_target_matching_is_case_insensitive_in_the_union():
+    lower = calc_enrichment_overlap("app", [], DISEASE)
+    upper = calc_enrichment_overlap("APP", [], DISEASE)
+    assert lower["pathway_matched_count"] == upper["pathway_matched_count"] == 2
+
+
+def test_pathway_matched_count_never_exceeds_the_disease_total():
+    gene = [{"term_id": t["term_id"], "p_value": 0.01} for t in DISEASE]
+    r = calc_enrichment_overlap("APP", gene, DISEASE)
+    assert r["pathway_matched_count"] == r["disease_pathway_count"] == 3
+    assert r["pathway_overlap_percent"] == 100.0
 
 
 def test_term_ids_match_case_insensitively():
@@ -79,9 +122,10 @@ def test_empty_disease_enrichment_does_not_divide_by_zero():
     assert r["disease_pathway_count"] == 0
 
 
-def test_empty_gene_enrichment_scores_zero():
-    r = calc_enrichment_overlap("APP", [], DISEASE)
+def test_empty_gene_enrichment_scores_zero_for_an_unrelated_target():
+    r = calc_enrichment_overlap("XYZ", [], DISEASE)
     assert r["pathway_overlap_percent"] == 0.0
+    assert r["pathway_matched_count"] == 0
     assert r["gene_pathway_count"] == 0
 
 

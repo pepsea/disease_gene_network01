@@ -411,12 +411,36 @@ def test_target_fit_reports_pathways_containing_the_gene(client):
     assert r["target_in_pathways"][0]["name"] == "Amyloid fiber formation"
 
 
+def test_the_target_itself_counts_in_the_pathway_overlap(client):
+    """MAPT's neighbourhood enriches to nothing, but MAPT is in a disease pathway."""
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["MAPT"]}).get_json()
+    r = body["results"][0]
+    assert r["gene_pathway_count"] == 0        # nothing came from the network
+    assert r["pathway_overlap_count"] == 0
+    assert r["target_in_pathway_count"] == 1   # MAPT is listed in "neuron death"
+    assert r["pathway_matched_count"] == 1     # so it is counted as covered
+    assert r["pathway_overlap_percent"] == 33.3
+    assert r["overlapping_pathways"][0]["via"] == "target"
+
+
+def test_pathway_matched_count_separates_network_and_target_hits(client):
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["results"][0]
+    # APP's network reaches two pathways; APP itself is listed in one of them.
+    assert r["pathway_overlap_count"] == 2
+    assert r["target_in_pathway_count"] == 1
+    assert r["pathway_matched_count"] == 2     # union, not 3
+    via = {p["term_id"]: p["via"] for p in r["overlapping_pathways"]}
+    assert via == {"R-HSA-1": "both", "GO:1": "network"}
+
+
 def test_gene_with_no_enriched_pathways_scores_zero(client):
+    """LONELY has no network enrichment and is in no disease pathway."""
     body = client.post("/api/analyze", json={"disease": "AD", "genes": ["LONELY"]}).get_json()
     r = body["results"][0]
     assert r["pathway_overlap_percent"] == 0.0
     assert r["pathway_weighted_percent"] == 0.0
     assert r["target_in_pathway_count"] == 0
+    assert r["pathway_matched_count"] == 0
 
 
 def test_enrichment_can_be_disabled_per_request(client):

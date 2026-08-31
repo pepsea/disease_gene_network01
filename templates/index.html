@@ -95,6 +95,9 @@
   .term{display:inline-block;margin-right:8px}
   .srcbadge{font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
     background:var(--soft);border:1px solid var(--border);margin-right:3px;vertical-align:1px}
+  .viatag{font-size:10px;font-weight:700;color:var(--moderate);
+    border:1px solid color-mix(in srgb,var(--moderate) 45%,transparent);
+    padding:0 4px;border-radius:3px;vertical-align:1px}
 </style>
 
 <div class="wrap">
@@ -421,7 +424,8 @@ function render(data) {
   html += '<p class="legend"><b>加重重複率</b> = （重複遺伝子のOTスコア合計 ＋ ターゲット自身のOTスコア）÷ 疾患ネットワーク全体のOTスコア合計。'
         + " ≥ " + (STRONG * 100) + "% 強い関連／" + (MODERATE * 100) + "〜" + (STRONG * 100)
         + "% 中程度／< " + (MODERATE * 100) + "% 関連が薄い。<br>"
-        + "<b>単純重複率</b> = 重複した疾患遺伝子数 ÷ 疾患ネットワークの遺伝子数（スコア非加重）。</p>";
+        + "<b>単純重複率</b> = 重複した疾患遺伝子数 ÷ 疾患ネットワークの遺伝子数（スコア非加重）。<br>"
+        + "どちらもターゲット遺伝子自身が疾患遺伝子である場合はそれを含めて数えます（重複遺伝子側では二重計上しません）。</p>";
   html += "</div>";
 
   html += renderEnrichment(data);
@@ -476,15 +480,16 @@ function renderEnrichment(data) {
       + Math.min(100, r.pathway_weighted_percent) + '%"></span></div>'
       + '<div class="small">' + LABEL[cls] + "</div></td>"
       + '<td class="num"><span class="pct">' + r.pathway_overlap_percent.toFixed(1) + "%</span>"
-      + '<div class="small">' + r.pathway_overlap_count + " / " + r.disease_pathway_count + " パスウェイ</div>"
-      + '<div class="small">自身の検出: ' + r.gene_pathway_count + " 件</div></td>"
+      + '<div class="small">' + r.pathway_matched_count + " / " + r.disease_pathway_count + " パスウェイ</div>"
+      + '<div class="small">NW経由 ' + r.pathway_overlap_count + " ／ 自身 " + r.target_in_pathway_count + "</div></td>"
       + '<td class="num">' + (r.target_in_pathway_count
           ? "★ " + r.target_in_pathway_count + " / " + r.disease_pathway_count
             + '<div class="small">' + r.target_fit_percent.toFixed(1) + "%</div>"
           : "—") + "</td>"
       + '<td class="terms">' + ((r.overlapping_pathways || []).slice(0, 5).map((t) =>
             '<span class="term"><span class="srcbadge">' + esc(t.source) + "</span>"
-            + esc(t.name) + " <span style=\"opacity:.7\">(p=" + Number(t.p_value).toExponential(1) + ")</span></span>"
+            + esc(t.name) + (t.via === "target" ? ' <span class="viatag">★自身</span>' : "")
+            + " <span style=\"opacity:.7\">(p=" + Number(t.p_value).toExponential(1) + ")</span></span>"
           ).join("<br>") || "—")
       + ((r.overlapping_pathways || []).length > 5
           ? '<br><span class="small">…他' + (r.overlapping_pathways.length - 5) + "件</span>" : "")
@@ -494,6 +499,9 @@ function renderEnrichment(data) {
   html += '<p class="legend"><b>加重パスウェイ重複率</b> = （重複パスウェイの -log10(p) 合計）÷ （疾患パスウェイ全体の -log10(p) 合計）。'
         + "有意なパスウェイほど重く数えます。<br>"
         + "<b>単純パスウェイ重複率</b> = 重複パスウェイ数 ÷ 疾患パスウェイ数。<br>"
+        + "重複には<b>PPIネットワーク経由</b>と<b>ターゲット遺伝子自身の所属</b>の両方を含めます"
+        + "（表1でターゲット自身のOTスコアを加算するのと同じ扱い。両方で該当しても1件として数えます）。"
+        + "★自身 の付いたパスウェイはターゲット自身の所属によるものです。<br>"
         + "<b>ターゲット自身の該当</b> = 疾患パスウェイのうち、ターゲット遺伝子自身が構成遺伝子として含まれる数。</p>";
   html += "</div>";
   return html;
@@ -505,8 +513,9 @@ function toCsv(d) {
                  "disease_gene_count", "target_self", "target_self_score",
                  "overlapping_genes",
                  "pathway_weighted_percent", "pathway_overlap_percent",
-                 "pathway_overlap_count", "disease_pathway_count",
-                 "target_in_pathway_count", "overlapping_pathways", "error"]];
+                 "pathway_matched_count", "pathway_overlap_count",
+                 "disease_pathway_count", "target_in_pathway_count",
+                 "overlapping_pathways", "error"]];
   for (const r of d.results) {
     rows.push([r.gene, r.input_gene ?? "", r.symbol_status ?? "", r.hgnc_id ?? "",
       r.weighted_percent ?? "", r.overlap_percent ?? "", r.matched_count ?? "",
@@ -514,9 +523,9 @@ function toCsv(d) {
       r.target_self ?? "", r.target_self_score ?? "",
       (r.overlapping_genes || []).map((g) => g.symbol + "(" + g.score + ")").join(" "),
       r.pathway_weighted_percent ?? "", r.pathway_overlap_percent ?? "",
-      r.pathway_overlap_count ?? "", r.disease_pathway_count ?? "",
-      r.target_in_pathway_count ?? "",
-      (r.overlapping_pathways || []).map((t) => t.name).join(" | "),
+      r.pathway_matched_count ?? "", r.pathway_overlap_count ?? "",
+      r.disease_pathway_count ?? "", r.target_in_pathway_count ?? "",
+      (r.overlapping_pathways || []).map((t) => t.name + "[" + t.via + "]").join(" | "),
       r.error ?? ""]);
   }
   return rows.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");

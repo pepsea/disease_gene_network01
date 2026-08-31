@@ -64,11 +64,14 @@ def calc_enrichment_overlap(
 
     Returns:
         ``pathway_weighted_percent`` — share of the disease's total pathway
-        significance (-log10 p) that the gene's own enrichment covers;
+        significance (-log10 p) that the gene covers, counting both the
+        network's enrichment and the target's own pathway membership;
         ``pathway_overlap_percent`` — the same unweighted, by term count;
+        ``pathway_matched_count`` — pathways covered in total;
+        ``pathway_overlap_count`` — of those, the ones the network reached;
         ``target_fit_percent`` — the original project's ``pathway_fit``: the
         share of disease pathways the target gene is itself annotated to;
-        plus the counts and the overlapping terms.
+        plus the overlapping terms, each tagged with how it was reached.
     """
     target = (gene or "").strip().upper()
 
@@ -82,27 +85,40 @@ def calc_enrichment_overlap(
     disease_count = len(disease_pathways)
     gene_term_ids = {_term_id(p) for p in gene_pathways}
 
-    overlap = [p for p in disease_pathways if _term_id(p) in gene_term_ids]
+    # Disease pathways reached through the network's enrichment.
+    network_hits = {_term_id(p) for p in disease_pathways if _term_id(p) in gene_term_ids}
+
+    # Disease pathways the target gene itself is annotated to (the original
+    # project's pathway_fit). The target counts on its own, exactly as its OT
+    # score does in the gene-level overlap: a single gene rarely produces a
+    # significant enrichment term, so relying on the enrichment alone would
+    # silently drop the target's own membership.
+    target_in = [
+        p
+        for p in disease_pathways
+        if target in {str(g).strip().upper() for g in (p.get("genes") or [])}
+    ]
+    target_hits = {_term_id(p) for p in target_in}
+    target_fit = round(len(target_in) / disease_count, 3) if disease_count else 0.0
+
+    # Covered = reached through the network OR through the target itself.
+    covered = network_hits | target_hits
+    overlap = [p for p in disease_pathways if _term_id(p) in covered]
 
     total_weight = sum(_weight(p) for p in disease_pathways)
     overlap_weight = sum(_weight(p) for p in overlap)
     weighted = round(overlap_weight / total_weight, 3) if total_weight > 0 else 0.0
     simple = round(len(overlap) / disease_count, 3) if disease_count else 0.0
 
-    # The original pathway_fit: disease pathways the target itself belongs to.
-    target_in = [
-        p
-        for p in disease_pathways
-        if target in {str(g).strip().upper() for g in (p.get("genes") or [])}
-    ]
-    target_fit = round(len(target_in) / disease_count, 3) if disease_count else 0.0
-
     return {
         "pathway_weighted_score": weighted,
         "pathway_weighted_percent": round(weighted * 100, 1),
         "pathway_simple_ratio": simple,
         "pathway_overlap_percent": round(simple * 100, 1),
-        "pathway_overlap_count": len(overlap),
+        # Total disease pathways covered, target included.
+        "pathway_matched_count": len(overlap),
+        # Of those, the ones the network's enrichment reached.
+        "pathway_overlap_count": len(network_hits),
         "disease_pathway_count": disease_count,
         "gene_pathway_count": len(gene_pathways),
         "target_fit_score": target_fit,
@@ -124,6 +140,15 @@ def calc_enrichment_overlap(
                 "source": p.get("source", ""),
                 "p_value": p.get("p_value", 1.0),
                 "term_size": p.get("term_size", 0),
+                # How this pathway was reached: the network's enrichment, the
+                # target's own membership, or both.
+                "via": (
+                    "both"
+                    if _term_id(p) in network_hits and _term_id(p) in target_hits
+                    else "network"
+                    if _term_id(p) in network_hits
+                    else "target"
+                ),
             }
             for p in sorted(overlap, key=lambda p: p.get("p_value", 1.0))
         ],

@@ -138,6 +138,32 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 （`NW_ENRICH_GENE_N` で件数を変更可能）。2つの表が同じ疾患を指すようにするため
 です。移植元は 20 遺伝子でエンリッチメントしていました。
 
+## ターゲット遺伝子自身の扱い
+
+両方の表で、ターゲット遺伝子自身の寄与を重複に含めます。
+
+| | ターゲット自身の数え方 |
+|---|---|
+| 表1 | ターゲットが疾患遺伝子リストに含まれる場合、そのOTスコアを分子に加算し `matched_count` にも計上 |
+| 表2 | ターゲットが疾患パスウェイの構成遺伝子である場合、そのパスウェイを重複として計上 |
+
+いずれも**二重計上はしません**。表1ではターゲット自身を重複遺伝子リストから除外し、
+表2ではネットワーク経由と自身の所属が同じパスウェイを指す場合も1件として数えます
+（`via` が `both`）。
+
+表2で自身を含めるのは重要です。PPIパートナーが少ない遺伝子はエンリッチメント
+クエリが実質1遺伝子になり、g:Profiler は単一遺伝子ではほぼ有意なタームを返しません。
+自身の所属を合算しないと、疾患パスウェイに含まれる遺伝子でもスコアが 0% になって
+しまいます。
+
+`overlapping_pathways` の各要素には、どの経路で重複したかを示す `via` が付きます。
+
+| `via` | 意味 |
+|---|---|
+| `network` | PPIネットワークのエンリッチメント経由 |
+| `target` | ターゲット遺伝子自身が構成遺伝子 |
+| `both` | 両方（1件として計上） |
+
 ## スコアの定義
 
 ```
@@ -149,7 +175,8 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 
 どちらも**疾患ネットワークに対する割合（％）**です。ターゲット自身が疾患遺伝子
 リストに含まれる場合、そのスコアが分子に加算されます（重複遺伝子側では二重
-計上しません）。
+計上しません）。表2も同様にターゲット自身の所属パスウェイを含めます
+（「ターゲット遺伝子自身の扱い」を参照）。
 
 | 加重重複率 | 解釈 |
 |---|---|
@@ -226,13 +253,15 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 
       // 表2（enrichment 有効時のみ）
       "pathway_weighted_percent": 58.6, "pathway_overlap_percent": 75.0,
-      "pathway_overlap_count": 3, "disease_pathway_count": 4,
+      "pathway_matched_count": 3,     // 重複パスウェイ総数（自身を含む）
+      "pathway_overlap_count": 2,     // うちネットワーク経由
+      "disease_pathway_count": 4,
       "gene_pathway_count": 3,
       "target_in_pathway_count": 2, "target_fit_percent": 50.0,
       "pathway_interpretation": "strong",
       "overlapping_pathways": [
         { "term_id": "R-HSA-977225", "name": "Amyloid fiber formation",
-          "source": "REAC", "p_value": 1e-12 }
+          "source": "REAC", "p_value": 1e-12, "via": "both" }
       ]
     }
   ]

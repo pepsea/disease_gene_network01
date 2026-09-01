@@ -13,13 +13,16 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request
 
+from collectors import hpo
 from collectors.gprofiler import enrich_gene_list
 from collectors.hgnc import resolve_gene_symbols
 from collectors.opentargets import (
     OpenTargetsError,
     get_disease_label,
     get_disease_phenotypes,
+    get_disease_top_genes,
     get_disease_with_top_genes,
+    get_disease_xrefs,
     is_ontology_id,
     normalise_ontology_id,
     resolve_disease_id,
@@ -152,6 +155,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         SYMPTOM_LIST_N=_env_int("NW_SYMPTOM_LIST_N", DEFAULT_SYMPTOM_LIST_N),
         SYMPTOM_MAX_PHENOTYPES=_env_int("NW_SYMPTOM_MAX", DEFAULT_MAX_PHENOTYPES),
         SYMPTOM_GENES_PER=_env_int("NW_SYMPTOM_GENES_PER", DEFAULT_GENES_PER_PHENOTYPE),
+        SYMPTOM_SOURCE=os.environ.get("NW_SYMPTOM_SOURCE", "auto"),
         PPI_DEFAULTS={
             "sources": list(DEFAULT_SOURCES),
             "string_score": _env_int("NW_STRING_SCORE", DEFAULT_STRING_SCORE),
@@ -175,6 +179,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             biogrid_enabled=bool(app.config["BIOGRID_KEY"]),
             enrichment_default=app.config["ENRICHMENT"],
             symptoms_default=app.config["SYMPTOMS"],
+            symptom_source_default=app.config["SYMPTOM_SOURCE"],
         )
 
     @app.route("/healthz")
@@ -188,6 +193,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "ppi_defaults": app.config["PPI_DEFAULTS"],
                 "enrichment": app.config["ENRICHMENT"],
                 "symptoms": app.config["SYMPTOMS"],
+                "symptom_source": app.config["SYMPTOM_SOURCE"],
             }
         )
 
@@ -305,20 +311,22 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         phenotypes: list[dict[str, Any]] = []
         symptom_set: dict[str, Any] = {"genes": [], "expanded": [], "empty": [],
                                        "failed": [], "phenotype_count": 0}
+        symptom_meta: dict[str, Any] = {"phenotype_source": "", "xrefs": []}
+        symptom_source = str(data.get("symptom_source") or app.config["SYMPTOM_SOURCE"])
+        if symptom_source not in VALID_SYMPTOM_SOURCES:
+            symptom_source = app.config["SYMPTOM_SOURCE"]
         if want_symptoms:
-            try:
-                phenotypes = get_disease_phenotypes(
-                    disease_id, limit=app.config["SYMPTOM_LIST_N"]
-                )
-            except OpenTargetsError as exc:
-                log.info("[symptoms] %s: %s", disease_id, exc)
-                phenotypes = []
+            phenotypes, symptom_meta = collect_symptoms(
+                disease_id, disease_label, symptom_source,
+                app.config["SYMPTOM_LIST_N"],
+            )
             if phenotypes:
                 symptom_set = build_symptom_gene_set(
                     phenotypes,
                     genes_per_phenotype=app.config["SYMPTOM_GENES_PER"],
                     max_phenotypes=app.config["SYMPTOM_MAX_PHENOTYPES"],
                     max_workers=app.config["MAX_WORKERS"],
+                    gene_fetcher=symptom_meta["gene_fetcher"],
                 )
         symptom_genes = symptom_set["genes"]
         symptom_per_phenotype = symptom_set.get("per_phenotype") or []
@@ -434,6 +442,13 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 },
                 "symptoms": {
                     "enabled": want_symptoms,
+                    "requested_source": symptom_source,
+                    "phenotype_source": symptom_meta.get("phenotype_source", ""),
+                    "gene_sources": sorted(
+                        {e.get("gene_source", "") for e in symptom_set["expanded"]
+                         if e.get("gene_source")}
+                    ),
+                    "xrefs": symptom_meta.get("xrefs", []),
                     "phenotype_count": len(phenotypes),
                     "expanded_count": len(symptom_set["expanded"]),
                     "gene_count": len(symptom_genes),
@@ -451,6 +466,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                         {"hpo_id": e.get("hpo_id", ""), "name": e.get("name", ""),
                          "frequency": e.get("frequency", ""),
                          "resources": e.get("resources") or [],
+                         "gene_source": e.get("gene_source", ""),
                          "gene_count": e.get("gene_count", 0)}
                         for e in symptom_per_phenotype
                     ],
@@ -466,6 +482,77 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         )
 
     return app
+
+
+VALID_SYMPTOM_SOURCES = ("auto", "opentargets", "hpo")
+
+
+def _hpo_gene_fetcher(ontology_id: str, top_n: int) -> dict[str, Any]:
+    return {"genes": hpo.get_phenotype_genes(ontology_id, top_n=top_n), "source": "hpo"}
+
+
+def _hybrid_gene_fetcher(ontology_id: str, top_n: int) -> dict[str, Any]:
+    """Open Targets first, HPO's curated links when it yields nothing.
+
+    Open Targets only resolves a phenotype's genes when it indexes that HP term
+    as a disease, which is not guaranteed; HPO's own phenotype-gene file always
+    has it.
+    """
+    try:
+        genes = get_disease_top_genes(ontology_id, top_n=top_n)
+    except OpenTargetsError:
+        genes = []
+    if genes:
+        return {"genes": genes, "source": "opentargets"}
+    return _hpo_gene_fetcher(ontology_id, top_n)
+
+
+def collect_symptoms(
+    disease_id: str,
+    disease_label: str,
+    source: str,
+    list_n: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Get the disease's symptoms, falling back from Open Targets to HPO.
+
+    Returns ``(phenotypes, meta)``. ``meta`` records which source supplied the
+    symptom list, the cross references used, and the gene fetcher to expand
+    them with.
+    """
+    meta: dict[str, Any] = {"phenotype_source": "", "xrefs": [],
+                            "gene_fetcher": _hybrid_gene_fetcher}
+
+    if source in ("auto", "opentargets"):
+        try:
+            phenotypes = get_disease_phenotypes(disease_id, limit=list_n)
+        except OpenTargetsError as exc:
+            log.info("[symptoms] Open Targets phenotypes unavailable: %s", exc)
+            phenotypes = []
+        if phenotypes:
+            meta["phenotype_source"] = "opentargets"
+            return phenotypes, meta
+        if source == "opentargets":
+            return [], meta
+
+    # HPO direct: needs the OMIM / Orphanet / DECIPHER ids HPO keys on.
+    xrefs: list[str] = []
+    try:
+        xrefs = get_disease_xrefs(disease_id)
+    except OpenTargetsError as exc:
+        log.info("[symptoms] cross references unavailable: %s", exc)
+    if not xrefs and disease_label:
+        # No xref: fall back to an exact disease-name match inside HPO.
+        xrefs = hpo.find_disease_ids_by_name(disease_label)
+
+    meta["xrefs"] = xrefs
+    meta["gene_fetcher"] = _hpo_gene_fetcher
+    if not xrefs:
+        return [], meta
+
+    phenotypes = hpo.get_disease_phenotypes(xrefs, limit=list_n)
+    if phenotypes:
+        meta["phenotype_source"] = "hpo"
+    return phenotypes, meta
 
 
 # Table 3 reuses the gene-level scorer, so its keys are namespaced to sit

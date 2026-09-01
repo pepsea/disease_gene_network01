@@ -21,6 +21,7 @@ COPY templates/ ./templates/
 
 # Cache directory for the SIGNOR bulk download, STRING per-gene results and
 # IntAct interactor counts. Mount it as a volume to keep it across restarts.
+# Also holds the HPO release files (phenotype.hpoa, phenotype_to_genes.txt).
 ENV PPI_CACHE_DIR=/app/ppi_cache
 
 # Run as an unprivileged user.

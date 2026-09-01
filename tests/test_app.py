@@ -119,6 +119,11 @@ def patched(monkeypatch):
     monkeypatch.setattr(app_module, "get_disease_phenotypes",
                         lambda disease_id, limit=50: [dict(p) for p in PHENOTYPES])
     monkeypatch.setattr(app_module, "build_symptom_gene_set", fake_symptom_set)
+    # Close the HPO fallback path too, so no test reaches the network when the
+    # Open Targets phenotypes come back empty.
+    monkeypatch.setattr(app_module, "get_disease_xrefs", lambda d: [])
+    monkeypatch.setattr(app_module.hpo, "get_disease_phenotypes", lambda ids, limit=50: [])
+    monkeypatch.setattr(app_module.hpo, "find_disease_ids_by_name", lambda n, limit=5: [])
     return monkeypatch
 
 
@@ -702,6 +707,50 @@ def test_matrix_is_absent_when_symptoms_are_off(client):
                     json={"disease": "AD", "genes": ["APP"], "symptoms": False}).get_json()["results"][0]
     assert "symptom_cells" not in r
     assert "symptom_mean_percent" not in r
+
+
+def test_the_symptom_source_used_is_reported(client):
+    sym = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["symptoms"]
+    assert sym["requested_source"] == "auto"
+    assert sym["phenotype_source"] == "opentargets"
+    assert "xrefs" in sym
+
+
+def test_the_symptom_source_can_be_chosen_per_request(monkeypatch, client):
+    def should_not_run(d, limit=50):
+        raise AssertionError("Open Targets must not be consulted for source=hpo")
+    monkeypatch.setattr(app_module, "get_disease_phenotypes", should_not_run)
+    monkeypatch.setattr(app_module, "get_disease_xrefs", lambda d: ["ORPHA:1020"])
+    monkeypatch.setattr(app_module.hpo, "get_disease_phenotypes",
+                        lambda ids, limit=50: [dict(p) for p in PHENOTYPES])
+    body = client.post("/api/analyze",
+                       json={"disease": "AD", "genes": ["APP"],
+                             "symptom_source": "hpo"}).get_json()
+    assert body["symptoms"]["requested_source"] == "hpo"
+    assert body["symptoms"]["phenotype_source"] == "hpo"
+    assert body["symptoms"]["xrefs"] == ["ORPHA:1020"]
+
+
+def test_an_unknown_symptom_source_falls_back_to_the_configured_one(client):
+    body = client.post("/api/analyze",
+                       json={"disease": "AD", "genes": ["APP"],
+                             "symptom_source": "nonsense"}).get_json()
+    assert body["symptoms"]["requested_source"] == "auto"
+
+
+def test_the_gene_source_is_reported_per_symptom(monkeypatch, patched):
+    def fetcher_aware(phenotypes, gene_fetcher=None, **kwargs):
+        base = fake_symptom_set(phenotypes, **kwargs)
+        for entry in base["expanded"]:
+            entry["gene_source"] = "hpo"
+        for entry in base["per_phenotype"]:
+            entry["gene_source"] = "hpo"
+        return base
+    monkeypatch.setattr(app_module, "build_symptom_gene_set", fetcher_aware)
+    c = create_app({"TESTING": True}).test_client()
+    sym = c.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["symptoms"]
+    assert sym["gene_sources"] == ["hpo"]
+    assert sym["matrix_symptoms"][0]["gene_source"] == "hpo"
 
 
 # --- pages -----------------------------------------------------------------

@@ -23,10 +23,12 @@
   .step{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;margin-bottom:10px}
   label{display:block;font-weight:600;font-size:13px;margin-bottom:6px}
   .hint{font-weight:400;color:var(--muted)}
-  input[type=text],input[type=number],textarea{width:100%;padding:9px 11px;border:1px solid var(--border);
-    border-radius:6px;font:inherit;background:var(--panel);color:inherit}
+  input[type=text],input[type=number],textarea,select{width:100%;padding:9px 11px;
+    border:1px solid var(--border);border-radius:6px;font:inherit;
+    background:var(--panel);color:inherit}
   textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
-  input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent);
+    outline-offset:-1px;border-color:var(--accent)}
   .field{margin-bottom:14px}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:10px 20px;
@@ -200,6 +202,15 @@
           症状由来遺伝子も解析</label>
         <div class="note">疾患の症状(HPO)から遺伝子を集め、重複を3つ目の表に表示</div>
       </div>
+      <div>
+        <label for="symptom-source">症状データの取得元</label>
+        <select id="symptom-source">
+          <option value="auto"{% if symptom_source_default == 'auto' %} selected{% endif %}>自動（OT優先・HPOで補完）</option>
+          <option value="opentargets"{% if symptom_source_default == 'opentargets' %} selected{% endif %}>Open Targets のみ</option>
+          <option value="hpo"{% if symptom_source_default == 'hpo' %} selected{% endif %}>HPO 直接（OMIM/Orphanet）</option>
+        </select>
+        <div class="note">OT に症状が無い疾患は HPO の公開ファイルから直接取得します</div>
+      </div>
     </div>
   </div>
 
@@ -370,7 +381,8 @@ async function run() {
     + genes.length + " 遺伝子を解析中…（PPI取得に時間がかかる場合があります）</div>";
 
   const body = { genes, ppi, enrichment: $("enrichment").checked,
-                 symptoms: $("symptoms").checked };
+                 symptoms: $("symptoms").checked,
+                 symptom_source: $("symptom-source").value };
   if (picked) { body.disease_id = picked.id; body.disease = picked.name; }
   else { body.disease = typed; }
 
@@ -470,11 +482,18 @@ function renderSymptoms(data) {
   let html = '<div class="panel">';
   html += '<p class="tabletitle">③ 症状由来遺伝子との重複</p>';
 
+  const SRC_LABEL = { opentargets: "Open Targets", hpo: "HPO 直接" };
   if (!s.gene_count) {
     html += '<p class="tablesub err">'
       + (s.phenotype_count
           ? "症状は " + s.phenotype_count + " 件見つかりましたが、遺伝子を取得できませんでした。"
-          : "この疾患には Open Targets に症状(HPO)の注釈がありません。")
+          : "この疾患には症状(HPO)の注釈が見つかりませんでした"
+            + (s.requested_source === "opentargets"
+                ? "（Open Targets のみを参照。HPO 直接を試すと取得できる場合があります）"
+                : (s.xrefs && s.xrefs.length
+                    ? "（HPO も参照: " + s.xrefs.map(esc).join(", ") + "）"
+                    : "（HPO 照合用の OMIM / Orphanet ID が見つかりませんでした）"))
+            + "。")
       + "</p></div>";
     return html;
   }
@@ -483,6 +502,12 @@ function renderSymptoms(data) {
         + s.expanded_count + " 件を遺伝子に展開 → 症状由来遺伝子 " + s.gene_count + " 件"
         + (s.excluded_count ? "（うち除外指定 " + s.excluded_count + " 件は展開せず）" : "")
         + "。各遺伝子のPPIネットワークがこの遺伝子群を何％カバーするか</p>";
+  html += '<p class="srcs-line">症状の取得元: <b>' + esc(SRC_LABEL[s.phenotype_source] || s.phenotype_source || "—")
+        + "</b>"
+        + (s.xrefs && s.xrefs.length ? "（照合ID: " + s.xrefs.map(esc).join(", ") + "）" : "")
+        + (s.gene_sources && s.gene_sources.length
+            ? " ／ 遺伝子の取得元: " + s.gene_sources.map((x) => esc(SRC_LABEL[x] || x)).join(" + ") : "")
+        + "</p>";
 
   if ((s.phenotypes || []).length) {
     html += '<p class="terms" style="margin-bottom:12px">症状: '
@@ -539,6 +564,7 @@ function renderSymptoms(data) {
               ? '<span class="freq">' + FREQ_LABEL[c.frequency] + "</span>" : "")
           + (c.resources && c.resources.length
               ? '<span class="freq">' + esc(c.resources.join("/")) + "</span>" : "")
+          + (c.gene_source === "hpo" ? '<span class="freq">遺伝子: HPO</span>' : "")
           + "</th>";
   }
   html += '<th class="mean">総合<br><span class="small">平均</span></th></tr></thead><tbody>';

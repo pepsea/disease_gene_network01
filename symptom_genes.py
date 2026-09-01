@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from collectors.opentargets import OpenTargetsError, get_disease_top_genes
 
@@ -31,11 +31,20 @@ DEFAULT_GENES_PER_PHENOTYPE = 50
 DEFAULT_MAX_WORKERS = 5
 
 
+def default_gene_fetcher(ontology_id: str, top_n: int) -> dict[str, Any]:
+    """Read a phenotype's genes from Open Targets' associations."""
+    return {
+        "genes": get_disease_top_genes(ontology_id, top_n=top_n),
+        "source": "opentargets",
+    }
+
+
 def build_symptom_gene_set(
     phenotypes: list[dict[str, Any]],
     genes_per_phenotype: int = DEFAULT_GENES_PER_PHENOTYPE,
     max_phenotypes: int = DEFAULT_MAX_PHENOTYPES,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    gene_fetcher: Optional[Callable[[str, int], dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Expand symptoms into a pooled gene set.
 
@@ -44,6 +53,9 @@ def build_symptom_gene_set(
         genes_per_phenotype: top associated targets to take per symptom.
         max_phenotypes: how many symptoms to expand (they arrive most relevant
             first, and each one costs an API call).
+        gene_fetcher: ``(ontology_id, top_n) -> {"genes": [...], "source": str}``.
+            Defaults to Open Targets' associations; pass an HPO-backed fetcher to
+            read the curated phenotype-gene links instead.
 
     Returns:
         ``{"genes", "per_phenotype", "expanded", "empty", "failed",
@@ -63,12 +75,11 @@ def build_symptom_gene_set(
         return {"genes": [], "per_phenotype": [], "expanded": [], "empty": [],
                 "failed": [], "phenotype_count": 0}
 
-    def fetch(phenotype: dict[str, Any]) -> tuple[dict[str, Any], Optional[list[dict]]]:
+    fetch_genes = gene_fetcher or default_gene_fetcher
+
+    def fetch(phenotype: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
         try:
-            genes = get_disease_top_genes(
-                phenotype["ontology_id"], top_n=genes_per_phenotype
-            )
-            return phenotype, genes
+            return phenotype, fetch_genes(phenotype["ontology_id"], genes_per_phenotype)
         except OpenTargetsError as exc:
             # A phenotype Open Targets does not index as a disease is expected,
             # not an error worth failing the analysis over.
@@ -86,18 +97,20 @@ def build_symptom_gene_set(
 
     workers = max(1, min(int(max_workers), len(usable)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        for phenotype, genes in executor.map(fetch, usable):
+        for phenotype, fetched in executor.map(fetch, usable):
             label = {"hpo_id": phenotype.get("hpo_id", ""),
                      "name": phenotype.get("name", ""),
                      "frequency": phenotype.get("frequency", "")}
-            if genes is None:
+            if fetched is None:
                 failed.append(label)
                 continue
+            genes = fetched.get("genes") or []
             if not genes:
                 empty.append(label)
                 continue
 
             label = {**label, "gene_count": len(genes),
+                     "gene_source": fetched.get("source", ""),
                      "resources": phenotype.get("resources") or [],
                      "ontology_id": phenotype.get("ontology_id", "")}
             # Keep the per-symptom list so each symptom can be scored on its own.

@@ -368,3 +368,62 @@ def get_disease_phenotypes(disease_id: str, limit: int = 50) -> list[dict[str, A
             }
         )
     return phenotypes
+
+
+# Cross-reference queries, richest first. `dbXRefs` is how an EFO/MONDO disease
+# maps onto the OMIM / Orphanet ids HPO keys its annotations on.
+XREF_QUERIES = [
+    """
+query DiseaseXrefs($efoId: String!) {
+  disease(efoId: $efoId) { id name dbXRefs }
+}
+""",
+    """
+query DiseaseXrefs($efoId: String!) {
+  disease(efoId: $efoId) { id name }
+}
+""",
+]
+
+_xref_query_index: Optional[int] = None
+
+# Only the sources HPO annotates against are useful downstream.
+_XREF_PREFIXES = ("OMIM", "MIM", "ORPHANET", "ORPHA", "ORPHACODE", "DECIPHER")
+
+
+def get_disease_xrefs(disease_id: str) -> list[str]:
+    """Return the disease's OMIM / Orphanet / DECIPHER cross references.
+
+    Returns ``[]`` when Open Targets exposes none — the caller then has no id to
+    look HPO up by and must fall back to a name match.
+    """
+    global _xref_query_index
+
+    order = (
+        [_xref_query_index]
+        if _xref_query_index is not None
+        else range(len(XREF_QUERIES))
+    )
+
+    disease = None
+    for index in order:
+        try:
+            data = _post(XREF_QUERIES[index], {"efoId": disease_id})
+        except OpenTargetsError:
+            continue
+        disease = data.get("disease")
+        if disease is None:
+            return []
+        _xref_query_index = index
+        break
+
+    if not disease:
+        return []
+
+    refs: list[str] = []
+    for ref in disease.get("dbXRefs") or []:
+        ref = str(ref or "").strip()
+        prefix = ref.split(":", 1)[0].upper() if ":" in ref else ""
+        if prefix in _XREF_PREFIXES and ref not in refs:
+            refs.append(ref)
+    return refs

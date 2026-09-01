@@ -153,14 +153,53 @@ HPO の各表現型は Open Targets の疾患インデックスに `HP_0002354` 
 いるため、疾患遺伝子と**同じ associations クエリ**でそのまま遺伝子を引けます。
 追加のAPIキーやID変換は不要です。
 
+### 症状データの取得元（Open Targets / HPO 直接）
+
+Open Targets 経由には2つの弱点があります。`phenotypes` フィールド自体が返らない
+疾患があること、症状→遺伝子の展開が「その HPO term が OT の疾患インデックスにも
+収載されていること」に依存することです。そこで **HPO の公開ファイルから直接
+取得する経路**を用意し、STEP 3 で切り替えられるようにしています。
+
+| 設定 | 動作 |
+|---|---|
+| `auto`（既定） | Open Targets を優先し、症状が取れなければ HPO に切り替え。症状ごとの遺伝子も OT で引けなければ HPO の curated リンクを使用 |
+| `opentargets` | Open Targets のみ。取れなければ表3は出ません |
+| `hpo` | HPO を直接参照 |
+
+HPO 直接経路が使うファイル:
+
+| ファイル | 用途 |
+|---|---|
+| `phenotype.hpoa` | 疾患 → 症状（頻度・aspect・NOT修飾つき）。OT が取り込んでいる元データそのもの |
+| `phenotype_to_genes.txt` | 症状 → 遺伝子（キュレーション済み） |
+
+いずれも初回に一度ダウンロードしてディスク（`PPI_CACHE_DIR`）と メモリに索引化
+します（SIGNOR と同じ方式・7日キャッシュ）。列名はヘッダ行から解決するため、
+将来のリリースで列順が変わっても値がずれません。
+
+HPO は疾患を **OMIM / ORPHA / DECIPHER** の ID で管理しているため、EFO/MONDO からの
+変換が必要です。Open Targets の `dbXRefs` から取得し、取れない場合は疾患名の
+完全一致で照合します（部分一致は別疾患を拾いやすいため行いません）。
+
+なお HPO のパスウェイ-遺伝子リンクは**キュレーション済みで重み付けがない**ため、
+HPO 由来の症状ではスコアを一律 1.0 とし、加重重複率は単純重複率と一致します。
+マトリックスの列見出しに `遺伝子: HPO` と表示されます。
+
 ### 症状の出典（Orphanet を含む）
 
-Open Targets の症状注釈は HPO が **OMIM・Orphanet・DECIPHER** を統合したもので、
-`evidence[].resource` に出典が入ります。**Orphanet 由来の症状も含まれます**。
-複数の情報源が同じ症状を注釈することがあるため、出典はすべて保持し
-（`resources`）、マトリックスの列見出しと症状リストの下に表示します。
+症状注釈は HPO が **OMIM・Orphanet・DECIPHER** を統合したもので、**Orphanet 由来の
+症状も含まれます**。複数の情報源が同じ症状を注釈することがあるため出典はすべて
+保持し（`resources`）、マトリックスの列見出しと症状リストの下に表示します。
 
-頻度注釈（必発／高頻度／頻発／時折／稀）の多くは Orphanet 由来です。
+Orphanet の ID 表記は `Orphanet:1020` / `ORPHA:1020` / `ORPHAcode` と揺れるため、
+すべて HPO の `ORPHA:` 形式に正規化して照合します。
+
+**頻度注釈（必発／高頻度／頻発／時折／稀）の多くは Orphanet 由来**です。OMIM の
+行には頻度が入らないことが多いため、同じ症状に複数の出典がある場合は
+Orphanet の頻度を優先します。
+
+`phenotype.hpoa` の aspect が `P`（表現型異常）以外の行 — 遺伝形式(`I`)や
+臨床経過(`C`) — は症状ではないので除外します。
 
 結果は**遺伝子 × 症状の数値マトリックス**で表示します。
 
@@ -279,6 +318,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
   "top_n": 100,                        // 疾患上位遺伝子数（任意、上限500）
   "enrichment": true,                  // 表2を計算するか（既定 true）
   "symptoms": true,                    // 表3を計算するか（既定 true）
+  "symptom_source": "auto",            // auto / opentargets / hpo
   "ppi": {
     "sources": ["signor", "string", "biogrid"],
     "string_score": 700,
@@ -303,7 +343,10 @@ common disease では疎です。注釈がない疾患では表3は表示され�
                         "source": "REAC", "p_value": 1e-12 } ]
   },
   "symptoms": {
-    "enabled": true, "phenotype_count": 5, "expanded_count": 3,
+    "enabled": true,
+    "requested_source": "auto", "phenotype_source": "hpo",
+    "gene_sources": ["hpo"], "xrefs": ["OMIM:104300", "Orphanet:1020"],
+    "phenotype_count": 5, "expanded_count": 3,
     "gene_count": 6, "excluded_count": 1, "unindexed_count": 1,
     "phenotypes": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
                       "frequency": "HP:0040281",
@@ -387,6 +430,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
 | `NW_SYMPTOM_LIST_N` | `50` | 取得する症状(HPO)の件数 |
 | `NW_SYMPTOM_MAX` | `20` | 遺伝子に展開する症状の件数（1件につきAPI呼び出し1回） |
 | `NW_SYMPTOM_GENES_PER` | `50` | 症状1件あたりに取得する遺伝子数 |
+| `NW_SYMPTOM_SOURCE` | `auto` | 症状の取得元（`auto` / `opentargets` / `hpo`） |
 | `PPI_CACHE_DIR` | `./ppi_cache` | PPI キャッシュの保存先 |
 | `PPI_CACHE_DISABLED` | 無効 | `1` でディスクキャッシュを無効化 |
 | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `2` / `8` | 常駐時のサーバ規模 |
@@ -394,7 +438,8 @@ common disease では疎です。注釈がない疾患では表3は表示され�
 | `LOG_LEVEL` | `info` | ログレベル |
 
 外部APIのURL（`OT_API_URL` / `HGNC_API_URL` / `SIGNOR_TSV_URL` / `STRING_URL` /
-`BIOGRID_URL` / `INTACT_URL` / `GPROFILER_URL`）も上書きできます。ミラーの利用やテストに使います。
+`BIOGRID_URL` / `INTACT_URL` / `GPROFILER_URL` / `HPO_HPOA_URL` /
+`HPO_PHENOTYPE_TO_GENES_URL`）も上書きできます。ミラーの利用やテストに使います。
 
 ## データソース
 
@@ -407,6 +452,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
 | [BioGRID](https://thebiogrid.org/) | キュレーション済み相互作用 | **必要** | 非商用・学術利用限定 |
 | [IntAct](https://www.ebi.ac.uk/intact/) | ハブ判定用の相互作用数 | 不要 | CC BY 4.0 |
 | [g:Profiler](https://biit.cs.ut.ee/gprofiler/) | パスウェイ/GO エンリッチメント | 不要 | BSD 2-Clause |
+| [HPO](https://hpo.jax.org/) | 症状（疾患→表現型→遺伝子）の直接取得 | 不要 | HPO ライセンス |
 
 各ソースは best-effort です。1つが落ちても残りで解析を続行し、
 HGNC に到達できない場合も入力シンボルのまま解析を進めます。
@@ -424,6 +470,7 @@ collectors/
 ├── _cache.py             # ディスクキャッシュの場所
 ├── opentargets.py        # 疾患検索・疾患上位遺伝子
 ├── hgnc.py               # HGNC シンボル照合
+├── hpo.py                # HPO 直接取得（症状・症状別遺伝子）
 ├── gprofiler.py          # パスウェイエンリッチメント
 ├── signor.py             # SIGNOR
 ├── string_db.py          # STRING
@@ -466,7 +513,10 @@ pytest
   伸びます。不要な場合は STEP 3 のチェックを外してください。
 - 表3は症状1件につき Open Targets を1回呼びます（既定で最大20件、リクエストごと
   に1回だけ・全遺伝子で共有）。症状注釈のない疾患では表3は出ません。
-- Open Targets が疾患として収載していない HPO 表現型はスキップされ、
+- Open Targets が疾患として収載していない HPO 表現型は、`auto` では HPO の
+  curated リンクで補完します。`opentargets` 固定にした場合はスキップされ、
   `unindexed_count` に計上されます。
+- HPO 直接経路は疾患名の**完全一致**でしか名前照合しません。`dbXRefs` に
+  OMIM / Orphanet の ID がなく、名前も一致しない疾患では表3が出ません。
 - IntAct の相互作用数が取得できない遺伝子はハブ判定の対象外です
   （取得失敗を「ハブでない」とも「ハブである」とも扱いません）。

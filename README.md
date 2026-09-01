@@ -329,9 +329,14 @@ Fisher の統合は自由度が常に偶数なので閉形式）。コンテナ�
 PowerPoint と Word は `<style>` ブロックを無視するため、**計算済みスタイルを
 各セルの `style` 属性に展開**しています。あわせて:
 
+- **クリップボードへの書き込みは `copy` イベント経由**です。
+  `navigator.clipboard` は secure context（HTTPS または localhost）でしか
+  使えず、Docker のアプリを LAN の IP やホスト名で開くと存在しません。
+  `copy` イベントなら平文 HTTP でも動き、こちらで生成した HTML が
+  そのままクリップボードに載ります
 - セルの塗りつぶしは inline CSS に加えて **`bgcolor` 属性でも出力**します。
-  Office は inline CSS よりレガシーの `bgcolor` を確実に解釈するためで、
-  マトリックスのヒートマップの色はこれで保持されます
+  **貼り付け先は `style` 属性を落とすことがあり、その場合 `bgcolor` だけが
+  残ります** — inline CSS だけでは色が完全に消えます
 - `color(srgb ...)`（CSS Color 4）は Office が解釈できないため **16進に変換**
 - ヒートマップの半透明色は**白に合成して単色化**（Office はセルのアルファを扱えない）
 - クラス名は除去したうえで、`display` などレイアウトに効くプロパティも

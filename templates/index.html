@@ -1022,33 +1022,81 @@ function tableToTsv(table) {
   ).join("\n");
 }
 
+// Writing the clipboard through a copy event puts our exact HTML on the
+// clipboard, and — unlike navigator.clipboard — works over plain HTTP too.
+// That matters here: the app is usually reached at a LAN address or hostname,
+// which is not a secure context, so navigator.clipboard is simply absent and
+// anything relying on it would silently fall back to copying the live DOM,
+// whose colours are color-mix() values Office cannot read.
+function copyViaCopyEvent(html, text) {
+  let handled = false;
+  const onCopy = (event) => {
+    const data = event.clipboardData;
+    if (!data) return;
+    if (html) data.setData("text/html", html);
+    data.setData("text/plain", text);
+    event.preventDefault();
+    handled = true;
+  };
+
+  // execCommand("copy") is a no-op without a selection in some browsers.
+  const holder = document.createElement("div");
+  holder.textContent = " ";
+  holder.setAttribute("style",
+    "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0");
+  document.body.appendChild(holder);
+
+  const selection = window.getSelection();
+  const saved = selection && selection.rangeCount
+    ? selection.getRangeAt(0).cloneRange() : null;
+
+  document.addEventListener("copy", onCopy, true);
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if (!document.execCommand("copy")) handled = false;
+  } catch (e) {
+    handled = false;
+  } finally {
+    document.removeEventListener("copy", onCopy, true);
+    selection.removeAllRanges();
+    if (saved) selection.addRange(saved);
+    holder.remove();
+  }
+  return handled;
+}
+
+async function copyViaClipboardApi(html, text) {
+  if (!navigator.clipboard) return false;
+  try {
+    if (!html) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    if (typeof ClipboardItem === "undefined") return false;
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([text], { type: "text/plain" }),
+    })]);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function copyTable(table, button, asText) {
   const label = button.textContent;
   const tsv = tableToTsv(table);
-  try {
-    if (asText) {
-      await navigator.clipboard.writeText(tsv);
-    } else {
-      await navigator.clipboard.write([new ClipboardItem({
-        "text/html": new Blob([tableToHtml(table)], { type: "text/html" }),
-        "text/plain": new Blob([tsv], { type: "text/plain" }),
-      })]);
-    }
-    button.textContent = "コピーしました";
-  } catch (e) {
-    // Older browsers, or a denied permission: fall back to selecting the table.
-    try {
-      const range = document.createRange();
-      range.selectNode(table);
-      const sel = window.getSelection();
-      sel.removeAllRanges(); sel.addRange(range);
-      document.execCommand("copy");
-      sel.removeAllRanges();
-      button.textContent = "コピーしました";
-    } catch (e2) {
-      button.textContent = "コピーできません";
-    }
-  }
+  const html = asText ? null : tableToHtml(table);
+
+  // The copy event first: it is the path that reliably carries cell fills into
+  // Office, and it does not depend on a secure context.
+  let ok = copyViaCopyEvent(html, tsv);
+  if (!ok) ok = await copyViaClipboardApi(html, tsv);
+
+  button.textContent = ok ? "コピーしました" : "コピーできません";
   setTimeout(() => { button.textContent = label; }, 1600);
 }
 

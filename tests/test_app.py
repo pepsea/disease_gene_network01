@@ -37,6 +37,35 @@ GENE_PATHWAYS = {
 }
 
 
+PHENOTYPES = [
+    {"hpo_id": "HP:0002354", "ontology_id": "HP_0002354", "name": "Memory impairment",
+     "frequency": "HP:0040281", "aspect": "P", "resource": "HPO", "excluded": False},
+    {"hpo_id": "HP:0000726", "ontology_id": "HP_0000726", "name": "Dementia",
+     "frequency": "HP:0040282", "aspect": "P", "resource": "HPO", "excluded": False},
+    {"hpo_id": "HP:0009999", "ontology_id": "HP_0009999", "name": "Absent finding",
+     "frequency": "", "aspect": "P", "resource": "HPO", "excluded": True},
+]
+SYMPTOM_GENES = [
+    {"symbol": "APP", "score": 1.4, "max_score": 0.8, "phenotype_count": 2,
+     "phenotypes": ["Memory impairment", "Dementia"]},
+    {"symbol": "PSEN1", "score": 0.7, "max_score": 0.7, "phenotype_count": 1,
+     "phenotypes": ["Dementia"]},
+    {"symbol": "MAPT", "score": 0.5, "max_score": 0.5, "phenotype_count": 1,
+     "phenotypes": ["Memory impairment"]},
+]
+
+
+def fake_symptom_set(phenotypes, **kwargs):
+    return {
+        "genes": [dict(g) for g in SYMPTOM_GENES],
+        "expanded": [{"hpo_id": p["hpo_id"], "name": p["name"],
+                      "frequency": p["frequency"], "gene_count": 2}
+                     for p in phenotypes if not p.get("excluded")],
+        "empty": [], "failed": [],
+        "phenotype_count": sum(1 for p in phenotypes if not p.get("excluded")),
+    }
+
+
 def make_fake_enrich():
     """Stub for enrich_gene_list.
 
@@ -72,6 +101,9 @@ def patched(monkeypatch):
     monkeypatch.setattr(app_module, "collect_ppi_partners", fake_collect)
     monkeypatch.setattr(app_module, "resolve_gene_symbols", fake_resolve_symbols)
     monkeypatch.setattr(app_module, "enrich_gene_list", make_fake_enrich())
+    monkeypatch.setattr(app_module, "get_disease_phenotypes",
+                        lambda disease_id, limit=50: [dict(p) for p in PHENOTYPES])
+    monkeypatch.setattr(app_module, "build_symptom_gene_set", fake_symptom_set)
     return monkeypatch
 
 
@@ -498,6 +530,103 @@ def test_enrichment_uses_the_same_disease_genes_as_the_overlap(monkeypatch, clie
     body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
     assert seen["first"] == [g["symbol"] for g in DISEASE_GENES]
     assert body["enrichment"]["disease_gene_n"] == body["disease_gene_count"]
+
+
+# --- symptom overlap (third table) -----------------------------------------
+
+def test_symptom_overlap_is_returned_per_gene(client):
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    sym = body["symptoms"]
+    assert sym["enabled"] is True
+    assert sym["phenotype_count"] == 3          # including the excluded one
+    assert sym["excluded_count"] == 1
+    assert sym["expanded_count"] == 2           # only the two present ones
+    assert sym["gene_count"] == 3
+    assert [p["name"] for p in sym["phenotypes"]][:2] == ["Memory impairment", "Dementia"]
+    assert sym["top_genes"][0]["symbol"] == "APP"
+    assert sym["top_genes"][0]["phenotype_count"] == 2
+
+    r = body["results"][0]
+    # Symptom set totals 2.6; APP itself 1.4 plus partners PSEN1 0.7 + MAPT 0.5.
+    assert r["symptom_weighted_percent"] == 100.0
+    assert r["symptom_matched_count"] == 3
+    assert r["symptom_gene_count"] == 3
+    assert r["symptom_target_self"] == "APP"
+
+
+def test_symptom_overlap_uses_the_same_ppi_partners(monkeypatch, client):
+    monkeypatch.setattr(app_module, "collect_ppi_partners",
+                        lambda gene, **kw: {"partners": ["MAPT"], "excluded_hubs": [],
+                                            "source_counts": {}, "graph_size": 2})
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["XYZ"]}).get_json()["results"][0]
+    # MAPT alone: 0.5 of 2.6
+    assert r["symptom_overlap_count"] == 1
+    assert r["symptom_matched_count"] == 1
+    assert r["symptom_weighted_percent"] == 19.2
+    assert r["symptom_target_self"] is None
+
+
+def test_symptom_keys_do_not_collide_with_the_disease_gene_table(client):
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["results"][0]
+    # Table 1 scores against 3 disease genes, table 3 against 3 symptom genes.
+    assert r["disease_gene_count"] == 3 and r["symptom_gene_count"] == 3
+    assert r["weighted_percent"] == 100.0
+    assert "symptom_weighted_percent" in r and "weighted_percent" in r
+
+
+def test_symptoms_can_be_disabled_per_request(client):
+    body = client.post("/api/analyze",
+                       json={"disease": "AD", "genes": ["APP"], "symptoms": False}).get_json()
+    assert body["symptoms"]["enabled"] is False
+    assert body["symptoms"]["gene_count"] == 0
+    assert "symptom_weighted_percent" not in body["results"][0]
+    assert body["results"][0]["weighted_percent"] == 100.0
+
+
+def test_symptoms_can_be_disabled_by_config(patched):
+    c = create_app({"TESTING": True, "SYMPTOMS": False}).test_client()
+    body = c.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["symptoms"]["enabled"] is False
+    assert "symptom_weighted_percent" not in body["results"][0]
+
+
+def test_a_request_cannot_re_enable_disabled_symptoms(patched):
+    c = create_app({"TESTING": True, "SYMPTOMS": False}).test_client()
+    body = c.post("/api/analyze",
+                  json={"disease": "AD", "genes": ["APP"], "symptoms": True}).get_json()
+    assert body["symptoms"]["enabled"] is False
+
+
+def test_a_disease_with_no_phenotypes_leaves_the_other_tables_intact(monkeypatch, client):
+    monkeypatch.setattr(app_module, "get_disease_phenotypes", lambda d, limit=50: [])
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["symptoms"]["phenotype_count"] == 0
+    assert body["symptoms"]["gene_count"] == 0
+    assert "symptom_weighted_percent" not in body["results"][0]
+    assert body["results"][0]["weighted_percent"] == 100.0
+    assert body["results"][0]["pathway_overlap_percent"] == 66.7
+
+
+def test_a_phenotype_lookup_failure_is_not_fatal(monkeypatch, client):
+    def boom(disease_id, limit=50):
+        raise OpenTargetsError("Cannot query field phenotypes")
+    monkeypatch.setattr(app_module, "get_disease_phenotypes", boom)
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    assert body["symptoms"]["phenotype_count"] == 0
+    assert body["results"][0]["weighted_percent"] == 100.0
+
+
+def test_symptom_limits_reach_the_builder(monkeypatch, patched):
+    seen = {}
+    def capture(phenotypes, **kwargs):
+        seen.update(kwargs)
+        return fake_symptom_set(phenotypes, **kwargs)
+    monkeypatch.setattr(app_module, "build_symptom_gene_set", capture)
+    c = create_app({"TESTING": True, "SYMPTOM_MAX_PHENOTYPES": 7,
+                    "SYMPTOM_GENES_PER": 11}).test_client()
+    c.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]})
+    assert seen["max_phenotypes"] == 7
+    assert seen["genes_per_phenotype"] == 11
 
 
 # --- pages -----------------------------------------------------------------

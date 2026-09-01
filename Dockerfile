@@ -14,7 +14,8 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py gunicorn.conf.py nw_overlap.py enrichment_overlap.py ppi_network.py ./
+COPY app.py gunicorn.conf.py nw_overlap.py enrichment_overlap.py \
+     symptom_genes.py ppi_network.py ./
 COPY collectors/ ./collectors/
 COPY templates/ ./templates/
 

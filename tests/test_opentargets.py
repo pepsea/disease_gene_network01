@@ -226,3 +226,121 @@ def test_get_disease_with_top_genes_returns_the_label(monkeypatch):
     label, genes = ot.get_disease_with_top_genes("EFO_0000249")
     assert label == "Alzheimer disease"
     assert [g["symbol"] for g in genes] == ["APP"]
+
+
+# --- get_disease_phenotypes ------------------------------------------------
+
+def phenotype_payload(rows, name="Alzheimer disease"):
+    return {"data": {"disease": {"id": "EFO_0000249", "name": name,
+                                 "phenotypes": {"count": len(rows), "rows": rows}}}}
+
+
+def hpo_row(hpo_id, name, evidence=None):
+    return {"phenotypeHPO": {"id": hpo_id, "name": name, "description": "d"},
+            "evidence": evidence if evidence is not None else
+            [{"aspect": "P", "frequency": "HP:0040281", "qualifierNot": False,
+              "resource": "HPO"}]}
+
+
+@pytest.fixture(autouse=True)
+def reset_phenotype_variant(monkeypatch):
+    monkeypatch.setattr(ot, "_phenotype_query_index", None)
+
+
+def test_phenotypes_are_parsed(monkeypatch):
+    rows = [hpo_row("HP:0002354", "Memory impairment")]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(phenotype_payload(rows))))
+    p = ot.get_disease_phenotypes("EFO_0000249")[0]
+    assert p["hpo_id"] == "HP:0002354"
+    assert p["ontology_id"] == "HP_0002354"
+    assert p["name"] == "Memory impairment"
+    assert p["frequency"] == "HP:0040281"
+    assert p["aspect"] == "P"
+    assert p["excluded"] is False
+
+
+def test_hpo_ids_are_converted_to_the_open_targets_form():
+    assert ot.hpo_to_ontology_id("HP:0002354") == "HP_0002354"
+    assert ot.hpo_to_ontology_id("hp:0002354") == "HP_0002354"
+    assert ot.hpo_to_ontology_id("") == ""
+
+
+def test_a_phenotype_all_sources_call_absent_is_excluded(monkeypatch):
+    rows = [hpo_row("HP:1", "Absent finding",
+                    [{"qualifierNot": True, "aspect": "P"},
+                     {"qualifierNot": True, "aspect": "P"}])]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(phenotype_payload(rows))))
+    assert ot.get_disease_phenotypes("EFO_1")[0]["excluded"] is True
+
+
+def test_a_phenotype_only_some_sources_call_absent_is_kept(monkeypatch):
+    rows = [hpo_row("HP:1", "Contested finding",
+                    [{"qualifierNot": True}, {"qualifierNot": False, "frequency": "HP:0040282"}])]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(phenotype_payload(rows))))
+    p = ot.get_disease_phenotypes("EFO_1")[0]
+    assert p["excluded"] is False
+    assert p["frequency"] == "HP:0040282"
+
+
+def test_rows_without_an_hpo_id_are_skipped(monkeypatch):
+    rows = [hpo_row("HP:1", "ok"), {"phenotypeHPO": {"name": "no id"}}, {}]
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(phenotype_payload(rows))))
+    assert [p["hpo_id"] for p in ot.get_disease_phenotypes("EFO_1")] == ["HP:1"]
+
+
+def test_a_disease_with_no_phenotypes_returns_empty(monkeypatch):
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse(phenotype_payload([]))))
+    assert ot.get_disease_phenotypes("EFO_1") == []
+
+
+def test_unknown_disease_returns_empty_rather_than_raising(monkeypatch):
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=FakeResponse({"data": {"disease": None}})))
+    assert ot.get_disease_phenotypes("EFO_nope") == []
+
+
+def test_phenotype_query_falls_back_when_evidence_is_unsupported(monkeypatch):
+    """A schema without the evidence fields must still yield the symptom list."""
+    calls = []
+
+    def handler(url, **kwargs):
+        query = kwargs["json"]["query"]
+        calls.append(query)
+        if "evidence" in query:
+            return FakeResponse({"errors": [{"message": "Cannot query field evidence"}]})
+        return FakeResponse(phenotype_payload(
+            [{"phenotypeHPO": {"id": "HP:1", "name": "Memory impairment"}}]))
+
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=handler))
+    result = ot.get_disease_phenotypes("EFO_1")
+    assert [p["name"] for p in result] == ["Memory impairment"]
+    assert result[0]["frequency"] == ""      # unavailable, not invented
+    assert len(calls) == 2                   # rich query, then the fallback
+
+
+def test_the_working_phenotype_variant_is_remembered(monkeypatch):
+    calls = []
+
+    def handler(url, **kwargs):
+        query = kwargs["json"]["query"]
+        calls.append(query)
+        if "evidence" in query:
+            return FakeResponse({"errors": [{"message": "no evidence field"}]})
+        return FakeResponse(phenotype_payload([{"phenotypeHPO": {"id": "HP:1", "name": "x"}}]))
+
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=handler))
+    ot.get_disease_phenotypes("EFO_1")
+    ot.get_disease_phenotypes("EFO_2")
+    assert len(calls) == 3   # 2 for the first call, 1 for the second
+
+
+def test_phenotypes_unavailable_entirely_returns_empty(monkeypatch):
+    monkeypatch.setattr(ot, "SESSION", FakeSession(
+        post=FakeResponse({"errors": [{"message": "Cannot query field phenotypes"}]})))
+    assert ot.get_disease_phenotypes("EFO_1") == []
+
+
+def test_phenotype_limit_is_clamped(monkeypatch):
+    session = FakeSession(post=FakeResponse(phenotype_payload([])))
+    monkeypatch.setattr(ot, "SESSION", session)
+    ot.get_disease_phenotypes("EFO_1", limit=10_000)
+    assert session.post_calls[0]["json"]["variables"]["size"] == ot.MAX_PAGE_SIZE

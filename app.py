@@ -7,6 +7,7 @@ Targets gene network that neighbourhood covers.
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import os
 from typing import Any
 
@@ -17,6 +18,7 @@ from collectors.hgnc import resolve_gene_symbols
 from collectors.opentargets import (
     OpenTargetsError,
     get_disease_label,
+    get_disease_phenotypes,
     get_disease_with_top_genes,
     is_ontology_id,
     normalise_ontology_id,
@@ -25,6 +27,11 @@ from collectors.opentargets import (
 )
 from enrichment_overlap import calc_enrichment_overlap
 from nw_overlap import MODERATE_THRESHOLD, STRONG_THRESHOLD, calc_network_overlap
+from symptom_genes import (
+    DEFAULT_GENES_PER_PHENOTYPE,
+    DEFAULT_MAX_PHENOTYPES,
+    build_symptom_gene_set,
+)
 from ppi_network import (
     DEFAULT_MAX_NODES,
     DEFAULT_SOURCES,
@@ -40,8 +47,12 @@ DEFAULT_MAX_WORKERS = 5
 # the whole disease network, so the two tables describe the same disease.
 DEFAULT_ENRICH_GENE_N = 100
 DEFAULT_ENRICH_MAX_TERMS = 50
+# How many symptoms to list, before the excluded ones are dropped.
+DEFAULT_SYMPTOM_LIST_N = 50
 
 VALID_SOURCES = ("signor", "string", "biogrid")
+
+log = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -137,6 +148,10 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         ENRICHMENT=True,
         ENRICH_GENE_N=_env_int("NW_ENRICH_GENE_N", DEFAULT_ENRICH_GENE_N),
         ENRICH_MAX_TERMS=_env_int("NW_ENRICH_MAX_TERMS", DEFAULT_ENRICH_MAX_TERMS),
+        SYMPTOMS=True,
+        SYMPTOM_LIST_N=_env_int("NW_SYMPTOM_LIST_N", DEFAULT_SYMPTOM_LIST_N),
+        SYMPTOM_MAX_PHENOTYPES=_env_int("NW_SYMPTOM_MAX", DEFAULT_MAX_PHENOTYPES),
+        SYMPTOM_GENES_PER=_env_int("NW_SYMPTOM_GENES_PER", DEFAULT_GENES_PER_PHENOTYPE),
         PPI_DEFAULTS={
             "sources": list(DEFAULT_SOURCES),
             "string_score": _env_int("NW_STRING_SCORE", DEFAULT_STRING_SCORE),
@@ -159,6 +174,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             ppi_defaults=app.config["PPI_DEFAULTS"],
             biogrid_enabled=bool(app.config["BIOGRID_KEY"]),
             enrichment_default=app.config["ENRICHMENT"],
+            symptoms_default=app.config["SYMPTOMS"],
         )
 
     @app.route("/healthz")
@@ -171,6 +187,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "biogrid_enabled": bool(app.config["BIOGRID_KEY"]),
                 "ppi_defaults": app.config["PPI_DEFAULTS"],
                 "enrichment": app.config["ENRICHMENT"],
+                "symptoms": app.config["SYMPTOMS"],
             }
         )
 
@@ -282,6 +299,29 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 max_results=app.config["ENRICH_MAX_TERMS"],
             )
 
+        # ── Symptoms: the disease's HPO phenotypes, expanded into a gene set.
+        want_symptoms = data.get("symptoms", app.config["SYMPTOMS"])
+        want_symptoms = bool(want_symptoms) and app.config["SYMPTOMS"]
+        phenotypes: list[dict[str, Any]] = []
+        symptom_set: dict[str, Any] = {"genes": [], "expanded": [], "empty": [],
+                                       "failed": [], "phenotype_count": 0}
+        if want_symptoms:
+            try:
+                phenotypes = get_disease_phenotypes(
+                    disease_id, limit=app.config["SYMPTOM_LIST_N"]
+                )
+            except OpenTargetsError as exc:
+                log.info("[symptoms] %s: %s", disease_id, exc)
+                phenotypes = []
+            if phenotypes:
+                symptom_set = build_symptom_gene_set(
+                    phenotypes,
+                    genes_per_phenotype=app.config["SYMPTOM_GENES_PER"],
+                    max_phenotypes=app.config["SYMPTOM_MAX_PHENOTYPES"],
+                    max_workers=app.config["MAX_WORKERS"],
+                )
+        symptom_genes = symptom_set["genes"]
+
         # ── Genes: map to approved HGNC symbols before analysing.
         if app.config["VALIDATE_SYMBOLS"]:
             resolved = resolve_gene_symbols(genes)
@@ -305,6 +345,12 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             )
             overlap = calc_network_overlap(symbol, ppi["partners"], disease_genes)
 
+            symptom_overlap: dict[str, Any] = {}
+            if symptom_genes:
+                symptom_overlap = _prefix_symptom(
+                    calc_network_overlap(symbol, ppi["partners"], symptom_genes)
+                )
+
             enrichment: dict[str, Any] = {}
             if want_enrichment and disease_pathways:
                 gene_pathways = enrich_gene_list(
@@ -323,6 +369,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 "source_counts": ppi["source_counts"],
                 **overlap,
                 **enrichment,
+                **symptom_overlap,
             }
 
         results: list[dict[str, Any]] = []
@@ -362,11 +409,54 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                         for p in disease_pathways[:10]
                     ],
                 },
+                "symptoms": {
+                    "enabled": want_symptoms,
+                    "phenotype_count": len(phenotypes),
+                    "expanded_count": len(symptom_set["expanded"]),
+                    "gene_count": len(symptom_genes),
+                    "excluded_count": sum(1 for p in phenotypes if p.get("excluded")),
+                    "unindexed_count": len(symptom_set["failed"]) + len(symptom_set["empty"]),
+                    "phenotypes": [
+                        {"hpo_id": p["hpo_id"], "name": p["name"],
+                         "frequency": p.get("frequency", ""),
+                         "excluded": p.get("excluded", False)}
+                        for p in phenotypes[:30]
+                    ],
+                    "expanded": symptom_set["expanded"][:30],
+                    "top_genes": [
+                        {"symbol": g["symbol"], "score": g["score"],
+                         "phenotype_count": g["phenotype_count"],
+                         "phenotypes": g["phenotypes"]}
+                        for g in symptom_genes[:10]
+                    ],
+                },
                 "results": results,
             }
         )
 
     return app
+
+
+# Table 3 reuses the gene-level scorer, so its keys are namespaced to sit
+# alongside table 1's in the same result object.
+_SYMPTOM_KEYS = {
+    "weighted_score": "symptom_weighted_score",
+    "weighted_percent": "symptom_weighted_percent",
+    "simple_ratio": "symptom_simple_ratio",
+    "overlap_percent": "symptom_overlap_percent",
+    "overlap_count": "symptom_overlap_count",
+    "matched_count": "symptom_matched_count",
+    "disease_gene_count": "symptom_gene_count",
+    "target_self": "symptom_target_self",
+    "target_self_score": "symptom_target_self_score",
+    "overlapping_genes": "symptom_overlapping_genes",
+    "interpretation": "symptom_interpretation",
+}
+
+
+def _prefix_symptom(overlap: dict[str, Any]) -> dict[str, Any]:
+    """Namespace the shared overlap keys for the symptom table."""
+    return {new: overlap[old] for old, new in _SYMPTOM_KEYS.items() if old in overlap}
 
 
 def _too_many(count: int, limit: int) -> str:

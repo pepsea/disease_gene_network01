@@ -7,9 +7,10 @@
 1. **疾患** — Open Targets を検索し、候補から選んで EFO/MONDO ID を確定
 2. **遺伝子** — HGNC (HUGO) の公式シンボルと照合（別名・旧シンボルは自動変換）
 3. **PPI** — SIGNOR / STRING / BioGRID の組み合わせとスコア条件を選択
-4. **解析** — 2つの表で重複を評価
+4. **解析** — 3つの表で重複を評価
    - **表1 遺伝子重複** — PPIパートナーと疾患遺伝子の重複
    - **表2 パスウェイ重複** — 疾患のエンリッチメント解析結果との重複
+   - **表3 症状由来遺伝子重複** — 疾患の症状(HPO)から集めた遺伝子群との重複
 
 PPI の収集・統合・ランキングは
 [aiagent_hypothesis_generator002](https://github.com/pepsea/aiagent_hypothesis_generator002)
@@ -109,7 +110,7 @@ BioGRID は API キーが必要です。未設定の場合はチェックボッ�
 | STRING | `required_score` 付きで遺伝子ごとに取得（3日キャッシュ） | パートナー同士のエッジを除外、パートナーごとに最高スコアの1件のみ |
 | BioGRID | 遺伝子ごとに取得（`selfInteractionsExcluded`） | 実験手法・文献違いの重複をパートナーごとに1件へ集約 |
 
-## 2つの表
+## 3つの表
 
 ### 表1 — 疾患ネットワーク重複（遺伝子レベル）
 
@@ -138,6 +139,40 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 （`NW_ENRICH_GENE_N` で件数を変更可能）。2つの表が同じ疾患を指すようにするため
 です。移植元は 20 遺伝子でエンリッチメントしていました。
 
+### 表3 — 症状由来遺伝子との重複
+
+疾患の**症状(HPO表現型)**を Open Targets から取得し、各症状に関連する遺伝子を
+集めて1つの「症状由来遺伝子セット」を作り、各遺伝子のPPIネットワークがそれを
+何％カバーするかを見ます。
+
+```
+疾患 → 症状(HPO)リスト → 症状ごとの関連遺伝子 → 統合 → PPIネットワークとの重複
+```
+
+HPO の各表現型は Open Targets の疾患インデックスに `HP_0002354` の形で収載されて
+いるため、疾患遺伝子と**同じ associations クエリ**でそのまま遺伝子を引けます。
+追加のAPIキーやID変換は不要です。
+
+| 指標 | 定義 |
+|---|---|
+| 加重重複率 | 重複した症状由来遺伝子のスコア合計 ÷ 症状由来遺伝子全体のスコア合計 |
+| 単純重複率 | 重複した症状由来遺伝子数 ÷ 症状由来遺伝子数 |
+
+遺伝子のスコアは、**その遺伝子が関与する各症状での関連スコアの合計**です。
+強さと広さの両方を反映するので、5つの症状に関わる遺伝子は同じ強さで1症状のみの
+遺伝子より重くなります。重複率は合計どうしの比なので [0, 1] に収まります。
+
+**「この疾患には伴わない」と注釈された症状**（HPO の `qualifierNot`）は遺伝子展開の
+対象外です。その疾患が起こさない症状の遺伝子を数えることになるためです。全ての
+情報源が「伴わない」としている症状のみを除外し、情報源によって判断が割れる場合は
+残します。
+
+表1と同様、ターゲット遺伝子自身が症状由来遺伝子である場合はそれを含めて数えます。
+
+症状注釈は疾患によって粗密があります。一般に希少・単一遺伝子疾患は充実し、
+common disease では疎です。注釈がない疾患では表3は表示されず、表1・表2は
+通常どおり動作します。
+
 ## ターゲット遺伝子自身の扱い
 
 両方の表で、ターゲット遺伝子自身の寄与を重複に含めます。
@@ -146,6 +181,7 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 |---|---|
 | 表1 | ターゲットが疾患遺伝子リストに含まれる場合、そのOTスコアを分子に加算し `matched_count` にも計上 |
 | 表2 | ターゲットが疾患パスウェイの構成遺伝子である場合、そのパスウェイを重複として計上 |
+| 表3 | ターゲットが症状由来遺伝子である場合、そのスコアを分子に加算し `symptom_matched_count` にも計上 |
 
 いずれも**二重計上はしません**。表1ではターゲット自身を重複遺伝子リストから除外し、
 表2ではネットワーク経由と自身の所属が同じパスウェイを指す場合も1件として数えます
@@ -215,6 +251,7 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
   "genes": ["APP", "PS1", "APOE"],    // 配列でも改行・カンマ区切り文字列でも可
   "top_n": 100,                        // 疾患上位遺伝子数（任意、上限500）
   "enrichment": true,                  // 表2を計算するか（既定 true）
+  "symptoms": true,                    // 表3を計算するか（既定 true）
   "ppi": {
     "sources": ["signor", "string", "biogrid"],
     "string_score": 700,
@@ -237,6 +274,16 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
     "enabled": true, "disease_pathway_count": 4, "disease_gene_n": 100,
     "top_pathways": [ { "term_id": "R-HSA-977225", "name": "Amyloid fiber formation",
                         "source": "REAC", "p_value": 1e-12 } ]
+  },
+  "symptoms": {
+    "enabled": true, "phenotype_count": 5, "expanded_count": 3,
+    "gene_count": 6, "excluded_count": 1, "unindexed_count": 1,
+    "phenotypes": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
+                      "frequency": "HP:0040281", "excluded": false } ],
+    "expanded":   [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
+                      "frequency": "HP:0040281", "gene_count": 3 } ],
+    "top_genes":  [ { "symbol": "APP", "score": 1.37, "phenotype_count": 2,
+                      "phenotypes": ["Memory impairment", "Dementia"] } ]
   },
   "results": [
     {
@@ -262,7 +309,15 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
       "overlapping_pathways": [
         { "term_id": "R-HSA-977225", "name": "Amyloid fiber formation",
           "source": "REAC", "p_value": 1e-12, "via": "both" }
-      ]
+      ],
+
+      // 表3（symptoms 有効時かつ症状注釈がある場合のみ）
+      "symptom_weighted_percent": 79.5, "symptom_overlap_percent": 66.7,
+      "symptom_matched_count": 4, "symptom_overlap_count": 3,
+      "symptom_gene_count": 6,
+      "symptom_target_self": "APP", "symptom_target_self_score": 1.37,
+      "symptom_interpretation": "strong",
+      "symptom_overlapping_genes": [ { "symbol": "MAPT", "score": 1.1 } ]
     }
   ]
 }
@@ -293,6 +348,9 @@ OFF にすると表2は表示されず、g:Profiler も呼びません。g:Profi
 | `NW_MAX_NODES` | `100` | PPIパートナー上限の既定値 |
 | `NW_ENRICH_GENE_N` | `100` | エンリッチメントに使う疾患遺伝子の件数 |
 | `NW_ENRICH_MAX_TERMS` | `50` | 取得するパスウェイ数の上限 |
+| `NW_SYMPTOM_LIST_N` | `50` | 取得する症状(HPO)の件数 |
+| `NW_SYMPTOM_MAX` | `20` | 遺伝子に展開する症状の件数（1件につきAPI呼び出し1回） |
+| `NW_SYMPTOM_GENES_PER` | `50` | 症状1件あたりに取得する遺伝子数 |
 | `PPI_CACHE_DIR` | `./ppi_cache` | PPI キャッシュの保存先 |
 | `PPI_CACHE_DISABLED` | 無効 | `1` でディスクキャッシュを無効化 |
 | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `2` / `8` | 常駐時のサーバ規模 |
@@ -323,6 +381,7 @@ HGNC に到達できない場合も入力シンボルのまま解析を進めま
 app.py                    # Flask ルーティング・入力検証・並列実行
 nw_overlap.py             # 表1: 遺伝子レベルの重複スコア
 enrichment_overlap.py     # 表2: パスウェイレベルの重複スコア
+symptom_genes.py          # 表3: 症状 → 遺伝子セットの構築
 ppi_network.py            # PPIグラフ構築・パートナーランキング・ハブ判定
 collectors/
 ├── _http.py              # リトライ付き共有 HTTP セッション
@@ -369,5 +428,9 @@ pytest
   （PPI・エンリッチメント側はキャッシュされます）。
 - 表2は遺伝子ごとに g:Profiler を1回呼ぶため、遺伝子数に比例して解析時間が
   伸びます。不要な場合は STEP 3 のチェックを外してください。
+- 表3は症状1件につき Open Targets を1回呼びます（既定で最大20件、リクエストごと
+  に1回だけ・全遺伝子で共有）。症状注釈のない疾患では表3は出ません。
+- Open Targets が疾患として収載していない HPO 表現型はスキップされ、
+  `unindexed_count` に計上されます。
 - IntAct の相互作用数が取得できない遺伝子はハブ判定の対象外です
   （取得失敗を「ハブでない」とも「ハブである」とも扱いません）。

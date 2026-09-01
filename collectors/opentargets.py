@@ -62,6 +62,54 @@ query SearchEntity($q: String!, $entity: [String!]) {
 # Set once the richer query is known to fail, so the fallback is not re-probed.
 _search_query_supported = True
 
+# Phenotype queries, richest first. `phenotypes` and the shape of its evidence
+# rows cannot be verified from this sandbox, so a rejected field falls back
+# rather than failing the request.
+PHENOTYPE_QUERIES = [
+    """
+query DiseasePhenotypes($efoId: String!, $size: Int!) {
+  disease(efoId: $efoId) {
+    id
+    name
+    phenotypes(page: { index: 0, size: $size }) {
+      count
+      rows {
+        phenotypeHPO { id name description }
+        evidence { aspect frequency qualifierNot resource }
+      }
+    }
+  }
+}
+""",
+    """
+query DiseasePhenotypes($efoId: String!, $size: Int!) {
+  disease(efoId: $efoId) {
+    id
+    name
+    phenotypes(page: { index: 0, size: $size }) {
+      count
+      rows { phenotypeHPO { id name description } }
+    }
+  }
+}
+""",
+    """
+query DiseasePhenotypes($efoId: String!, $size: Int!) {
+  disease(efoId: $efoId) {
+    id
+    name
+    phenotypes(page: { index: 0, size: $size }) {
+      count
+      rows { phenotypeHPO { id name } }
+    }
+  }
+}
+""",
+]
+
+# Set once a variant is known to work, so later calls skip the rejected ones.
+_phenotype_query_index: Optional[int] = None
+
 DISEASE_TOP_GENES_QUERY = """
 query DiseaseTopGenes($efoId: String!, $size: Int!) {
   disease(efoId: $efoId) {
@@ -234,3 +282,75 @@ def get_disease_top_genes(disease_id: str, top_n: int = 100) -> list[dict[str, A
     by descending association score (the order Open Targets returns them in).
     """
     return get_disease_with_top_genes(disease_id, top_n)[1]
+
+
+def hpo_to_ontology_id(hpo_id: str) -> str:
+    """``HP:0002354`` -> ``HP_0002354``, the form Open Targets indexes it under."""
+    return str(hpo_id or "").strip().replace(":", "_").upper()
+
+
+def get_disease_phenotypes(disease_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Return the disease's HPO phenotypes (its symptoms), most relevant first.
+
+    Each entry is ``{"hpo_id", "ontology_id", "name", "description", "frequency",
+    "aspect", "resource", "excluded"}``. Phenotypes every source marks as
+    *absent* in this disease (``qualifierNot``) are flagged ``excluded`` — they
+    describe what the disease does not cause, so callers should not use them to
+    seed genes.
+
+    Returns ``[]`` when the API exposes no phenotypes for the disease, or when
+    the field is unavailable; symptom analysis is optional, never fatal.
+    """
+    global _phenotype_query_index
+
+    size = max(1, min(int(limit), MAX_PAGE_SIZE))
+    order = (
+        [_phenotype_query_index]
+        if _phenotype_query_index is not None
+        else range(len(PHENOTYPE_QUERIES))
+    )
+
+    disease = None
+    for index in order:
+        try:
+            data = _post(PHENOTYPE_QUERIES[index], {"efoId": disease_id, "size": size})
+        except OpenTargetsError:
+            continue
+        disease = data.get("disease")
+        if disease is None:
+            return []
+        _phenotype_query_index = index
+        break
+
+    if disease is None:
+        return []
+
+    rows = (disease.get("phenotypes") or {}).get("rows") or []
+
+    phenotypes: list[dict[str, Any]] = []
+    for row in rows:
+        hpo = row.get("phenotypeHPO") or {}
+        hpo_id = str(hpo.get("id") or "").strip()
+        if not hpo_id:
+            continue
+
+        evidence = [e for e in (row.get("evidence") or []) if isinstance(e, dict)]
+        # Only treat a phenotype as excluded when every source says so.
+        excluded = bool(evidence) and all(e.get("qualifierNot") for e in evidence)
+        frequency = next((e.get("frequency") for e in evidence if e.get("frequency")), "")
+        aspect = next((e.get("aspect") for e in evidence if e.get("aspect")), "")
+        resource = next((e.get("resource") for e in evidence if e.get("resource")), "")
+
+        phenotypes.append(
+            {
+                "hpo_id": hpo_id,
+                "ontology_id": hpo_to_ontology_id(hpo_id),
+                "name": hpo.get("name") or hpo_id,
+                "description": (hpo.get("description") or "")[:300],
+                "frequency": frequency or "",
+                "aspect": aspect or "",
+                "resource": resource or "",
+                "excluded": excluded,
+            }
+        )
+    return phenotypes

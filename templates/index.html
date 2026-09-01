@@ -177,6 +177,11 @@
           エンリッチメント解析も実行</label>
         <div class="note">疾患パスウェイとの重複を2つ目の表に表示（g:Profiler）</div>
       </div>
+      <div>
+        <label class="chk"><input type="checkbox" id="symptoms" {% if symptoms_default %}checked{% endif %}>
+          症状由来遺伝子も解析</label>
+        <div class="note">疾患の症状(HPO)から遺伝子を集め、重複を3つ目の表に表示</div>
+      </div>
     </div>
   </div>
 
@@ -346,7 +351,8 @@ async function run() {
   $("result").innerHTML = '<div class="panel"><span class="spinner"></span>'
     + genes.length + " 遺伝子を解析中…（PPI取得に時間がかかる場合があります）</div>";
 
-  const body = { genes, ppi, enrichment: $("enrichment").checked };
+  const body = { genes, ppi, enrichment: $("enrichment").checked,
+                 symptoms: $("symptoms").checked };
   if (picked) { body.disease_id = picked.id; body.disease = picked.name; }
   else { body.disease = typed; }
 
@@ -429,7 +435,101 @@ function render(data) {
   html += "</div>";
 
   html += renderEnrichment(data);
+  html += renderSymptoms(data);
   $("result").innerHTML = html;
+}
+
+// ── Table 3: overlap with genes behind the disease's symptoms ─────────────
+const FREQ_LABEL = {
+  "HP:0040280": "必発(100%)", "HP:0040281": "高頻度(80-99%)", "HP:0040282": "頻発(30-79%)",
+  "HP:0040283": "時折(5-29%)", "HP:0040284": "稀(1-4%)", "HP:0040285": "除外(0%)",
+};
+
+function renderSymptoms(data) {
+  const s = data.symptoms || {};
+  if (!s.enabled) return "";
+
+  let html = '<div class="panel">';
+  html += '<p class="tabletitle">③ 症状由来遺伝子との重複</p>';
+
+  if (!s.gene_count) {
+    html += '<p class="tablesub err">'
+      + (s.phenotype_count
+          ? "症状は " + s.phenotype_count + " 件見つかりましたが、遺伝子を取得できませんでした。"
+          : "この疾患には Open Targets に症状(HPO)の注釈がありません。")
+      + "</p></div>";
+    return html;
+  }
+
+  html += '<p class="tablesub">症状(HPO) ' + s.phenotype_count + " 件のうち "
+        + s.expanded_count + " 件を遺伝子に展開 → 症状由来遺伝子 " + s.gene_count + " 件"
+        + (s.excluded_count ? "（うち除外指定 " + s.excluded_count + " 件は展開せず）" : "")
+        + "。各遺伝子のPPIネットワークがこの遺伝子群を何％カバーするか</p>";
+
+  if ((s.phenotypes || []).length) {
+    html += '<p class="terms" style="margin-bottom:12px">症状: '
+      + s.phenotypes.slice(0, 12).map((t) =>
+          '<span class="term">' + (t.excluded ? '<s>' : "") + esc(t.name)
+          + (t.excluded ? "</s>" : "")
+          + (t.frequency && FREQ_LABEL[t.frequency]
+              ? ' <span style="opacity:.7">' + FREQ_LABEL[t.frequency] + "</span>" : "")
+          + "</span>").join("")
+      + (s.phenotypes.length > 12 ? " …他" + (s.phenotype_count - 12) + "件" : "")
+      + "</p>";
+  }
+  if ((s.top_genes || []).length) {
+    html += '<p class="terms" style="margin-bottom:12px">症状由来遺伝子 上位: '
+      + s.top_genes.slice(0, 8).map((g) =>
+          '<span class="term"><b>' + esc(g.symbol) + "</b> "
+          + '<span style="opacity:.7">(' + g.score.toFixed(2) + " / " + g.phenotype_count
+          + "症状)</span></span>").join("")
+      + "</p>";
+  }
+
+  const LABEL = { strong: "強い関連", moderate: "中程度", weak: "関連が薄い" };
+  html += '<div class="table-scroll"><table><thead><tr>'
+        + "<th>遺伝子</th><th>加重重複率<br><span class=\"small\">症状スコア加重</span></th>"
+        + "<th>単純重複率<br><span class=\"small\">遺伝子数ベース</span></th>"
+        + "<th>ターゲット自身</th><th>重複した症状由来遺伝子（上位5件）</th>"
+        + "</tr></thead><tbody>";
+
+  for (const r of data.results) {
+    const nameCell = "<b>" + esc(r.gene) + "</b>"
+      + (r.input_gene && r.input_gene.toUpperCase() !== r.gene.toUpperCase()
+          ? '<div class="small">入力: ' + esc(r.input_gene) + "</div>" : "");
+
+    if (r.error || r.symptom_weighted_percent == null) {
+      html += "<tr><td>" + nameCell + '</td><td colspan="4" class="small">'
+        + (r.error ? '<span class="err">' + esc(r.error) + "</span>" : "—") + "</td></tr>";
+      continue;
+    }
+    const cls = r.symptom_interpretation || "weak";
+    html += "<tr>"
+      + "<td>" + nameCell + "</td>"
+      + '<td class="num"><span class="pct ' + cls + '">' + r.symptom_weighted_percent.toFixed(1) + "%</span>"
+      + '<div class="bar" style="color:var(--' + cls + ')"><span style="width:'
+      + Math.min(100, r.symptom_weighted_percent) + '%"></span></div>'
+      + '<div class="small">' + LABEL[cls] + "</div></td>"
+      + '<td class="num"><span class="pct">' + r.symptom_overlap_percent.toFixed(1) + "%</span>"
+      + '<div class="small">' + r.symptom_matched_count + " / " + r.symptom_gene_count + " 遺伝子</div>"
+      + '<div class="small">PPI経由 ' + r.symptom_overlap_count + "</div></td>"
+      + '<td class="num">' + (r.symptom_target_self
+          ? "★ " + esc(r.symptom_target_self) + " (" + Number(r.symptom_target_self_score).toFixed(2) + ")"
+          : "—") + "</td>"
+      + '<td class="small">' + ((r.symptom_overlapping_genes || []).slice(0, 5).map((g) =>
+            esc(g.symbol) + "(" + Number(g.score).toFixed(2) + ")").join(", ") || "—")
+      + ((r.symptom_overlapping_genes || []).length > 5
+          ? " …他" + (r.symptom_overlapping_genes.length - 5) + "件" : "")
+      + "</td></tr>";
+  }
+  html += "</tbody></table></div>";
+  html += '<p class="legend"><b>症状由来遺伝子</b> = 疾患の各症状(HPO)に関連する遺伝子を Open Targets から集めて統合したもの。'
+        + "遺伝子のスコアは、その遺伝子が関与する各症状での関連スコアの<b>合計</b>です"
+        + "（強さと広さの両方を反映。5症状に関わる遺伝子は1症状のみの遺伝子より重くなります）。<br>"
+        + "「この疾患に伴わない」と注釈された症状は遺伝子展開の対象外です。"
+        + "表1と同様、ターゲット遺伝子自身が症状由来遺伝子である場合はそれを含めて数えます。</p>";
+  html += "</div>";
+  return html;
 }
 
 // ── Table 2: overlap with the disease's pathway enrichment ────────────────
@@ -526,6 +626,10 @@ function toCsv(d) {
       r.pathway_matched_count ?? "", r.pathway_overlap_count ?? "",
       r.disease_pathway_count ?? "", r.target_in_pathway_count ?? "",
       (r.overlapping_pathways || []).map((t) => t.name + "[" + t.via + "]").join(" | "),
+      r.symptom_weighted_percent ?? "", r.symptom_overlap_percent ?? "",
+      r.symptom_matched_count ?? "", r.symptom_overlap_count ?? "",
+      r.symptom_gene_count ?? "",
+      (r.symptom_overlapping_genes || []).map((g) => g.symbol + "(" + g.score + ")").join(" "),
       r.error ?? ""]);
   }
   return rows.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");

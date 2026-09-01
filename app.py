@@ -245,6 +245,18 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             limit = 10
         return jsonify({"query": query, "results": hpo.search_diseases(query, limit=limit)})
 
+    @app.route("/api/hpo/phenotypes")
+    def hpo_phenotypes():
+        """Search HPO's own terms (HP ids), to name the symptoms directly."""
+        query = (request.args.get("q") or "").strip()
+        if not query:
+            return jsonify({"error": "q is required"}), 400
+        try:
+            limit = min(int(request.args.get("limit", 15)), 50)
+        except (TypeError, ValueError):
+            limit = 15
+        return jsonify({"query": query, "results": hpo.search_phenotypes(query, limit=limit)})
+
     @app.route("/api/genes/validate", methods=["POST"])
     def validate_genes():
         """Check submitted symbols against HGNC without running an analysis."""
@@ -332,10 +344,13 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         if want_symptoms:
             chosen_ids = data.get("hpo_disease_ids")
             chosen_ids = chosen_ids if isinstance(chosen_ids, list) else []
+            chosen_terms = data.get("hpo_phenotype_ids")
+            chosen_terms = chosen_terms if isinstance(chosen_terms, list) else []
             phenotypes, symptom_meta = collect_symptoms(
                 disease_id, disease_label, symptom_source,
                 app.config["SYMPTOM_LIST_N"],
                 hpo_disease_ids=chosen_ids[:10],
+                hpo_phenotype_ids=chosen_terms[: app.config["SYMPTOM_MAX_PHENOTYPES"]],
             )
             if phenotypes:
                 symptom_set = build_symptom_gene_set(
@@ -547,21 +562,35 @@ def collect_symptoms(
     source: str,
     list_n: int,
     hpo_disease_ids: Optional[list[str]] = None,
+    hpo_phenotype_ids: Optional[list[str]] = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Get the disease's symptoms, falling back from Open Targets to HPO.
+    """Get the symptoms to analyse, falling back from Open Targets to HPO.
 
     Args:
-        hpo_disease_ids: OMIM / ORPHA / DECIPHER ids chosen from HPO's own
-            disease registry. When given these are used directly, skipping both
-            Open Targets and the cross-reference lookup — the disease has been
-            identified in HPO's own terms, which is more reliable than mapping
-            onto it.
+        hpo_disease_ids: OMIM / ORPHA / DECIPHER ids from HPO's disease
+            registry. HPO annotates diseases under those namespaces — it has no
+            disease ids of its own — so this identifies the disease without
+            going through Open Targets' cross references.
+        hpo_phenotype_ids: HP term ids (``HP:0002354``). These are HPO's own
+            ids, and giving them names the symptoms outright: no disease is
+            involved, and the matrix columns are exactly what was asked for.
 
     Returns ``(phenotypes, meta)``. ``meta`` records which source supplied the
     symptom list, the ids used, and the gene fetcher to expand them with.
     """
     meta: dict[str, Any] = {"phenotype_source": "", "xrefs": [],
                             "xref_origin": "", "gene_fetcher": _hybrid_gene_fetcher}
+
+    # Symptoms named directly outrank everything: nothing has to be inferred.
+    terms = [str(i).strip() for i in (hpo_phenotype_ids or []) if str(i).strip()]
+    if terms:
+        phenotypes = hpo.get_phenotypes_by_id(terms)
+        meta["gene_fetcher"] = _hpo_gene_fetcher
+        meta["xrefs"] = [p["hpo_id"] for p in phenotypes]
+        meta["xref_origin"] = "phenotypes"
+        if phenotypes:
+            meta["phenotype_source"] = "hpo"
+        return phenotypes, meta
 
     # A disease picked directly in HPO wins over anything derived from EFO.
     chosen = [str(i).strip() for i in (hpo_disease_ids or []) if str(i).strip()]

@@ -36,7 +36,7 @@ HUMAN_TAX_ID = 9606
 # Two objective rules, OR'd: a very high global interactor count, or membership
 # of a family known to interact promiscuously (G proteins, ubiquitin, tubulin,
 # ...) which the count alone does not always catch.
-HUB_DEGREE_THRESHOLD = int(os.environ.get("HUB_DEGREE_THRESHOLD", "1000"))
+HUB_DEGREE_THRESHOLD = int(os.environ.get("HUB_DEGREE_THRESHOLD", "500"))
 
 HUB_FAMILY_PATTERNS = [
     r"^GNA[0-9A-Z]",     # G protein alpha subunits

@@ -82,7 +82,7 @@ gunicorn -c gunicorn.conf.py app:app           # 本番同等
 | ソース | SIGNOR + STRING | SIGNOR / STRING / BioGRID を自由に組み合わせ |
 | STRING 信頼度閾値 | 700 | STRING 側の `required_score`（0–1000、400=中, 700=高） |
 | 共通スコア下限 | なし | 全ソース共通のエッジスコア下限（0–1） |
-| ハブ判定の相互作用数 | 1000 | IntAct のグローバル相互作用数がこれを超えると非特異ハブとして除外 |
+| ハブ判定の相互作用数 | 500 | IntAct のグローバル相互作用数がこれを超えると非特異ハブとして除外 |
 | ハブ遺伝子を除外する | ON | 上記に加え、ユビキチン・アクチン・チューブリン等の非特異ハブ族も除外 |
 | PPIパートナー上限 | 1000 | ランキング上位から採用する件数。各ソースへの取得件数もこれに追従します |
 
@@ -181,15 +181,35 @@ HPO は疾患を **OMIM / ORPHA / DECIPHER** の ID で管理しているため�
 変換が必要です。Open Targets の `dbXRefs` から取得し、取れない場合は疾患名の
 完全一致で照合します（自動処理では選択者がいないため、部分一致は行いません）。
 
-### HPO の疾患を直接指定する
+### 表3の症状を手動で指定する
+
+STEP 1 の「表3の症状を手動で指定する」から、2通りの指定ができます。
+
+#### A. 症状 (HP ID) を直接指定 — HPO 本来のID
+
+`HP:0002354` のような **HP ID は HPO 自身の表現型ID**です。これを指定すると
+疾患を介さずに解析対象の症状が決まり、マトリックスの列が指定したものだけに
+なります。名前（`Memory impairment`）でも ID（`HP:0002354` / `HP_0002354`）でも
+検索できます。
+
+疾患の症状セットに縛られず、着目したい症状だけで遺伝子を比較したい場合に使います。
+疾患指定より優先され、指定した場合は疾患からの症状取得を行いません。
+
+検索対象は**遺伝子が紐づく HP 用語のみ**です（遺伝子のない症状はマトリックスの
+列になり得ないため）。
+
+#### B. 疾患 (OMIM / Orphanet ID) を指定
+
+**HPO の疾患注釈は OMIM / Orphanet / DECIPHER の ID で管理されており、
+HPO 独自の疾患ID体系はありません。** `phenotype.hpoa` はそれらの疾患を固有の
+名前で持っているため、Open Targets を経由せずに疾患を特定できます。
 
 自動変換に頼らず、**HPO 自身の疾患レジストリから疾患を選ぶ**こともできます。
 `phenotype.hpoa` は OMIM / Orphanet / DECIPHER の全疾患を固有の名前で持っているため、
 Open Targets を経由せずに疾患を特定できます。
 
-STEP 1 の「症状データの疾患を HPO で直接指定する」から検索してください。
-こちらは**部分一致**で候補を出し、完全一致 → 前方一致 → 部分一致の順、
-同じ段では注釈の多い疾患を上位に並べます（選ぶのは人なので、候補を出すのが正解）。
+**部分一致**で候補を出し、完全一致 → 前方一致 → 部分一致の順、同じ段では注釈の
+多い疾患を上位に並べます（選ぶのは人なので、候補を出すのが正解）。
 
 使いどころ:
 
@@ -394,7 +414,8 @@ PowerPoint と Word は `<style>` ブロックを無視するため、**計算�
   "enrichment": true,                  // 表2を計算するか（既定 true）
   "symptoms": true,                    // 表3を計算するか（既定 true）
   "symptom_source": "auto",            // auto / opentargets / hpo
-  "hpo_disease_ids": ["ORPHA:1848"],   // HPOで直接指定（最大10件、表3のみに影響）
+  "hpo_phenotype_ids": ["HP:0002354"], // 症状を直接指定（HP ID、最優先）
+  "hpo_disease_ids": ["ORPHA:1848"],   // 疾患を指定（OMIM/Orphanet ID、最大10件）
   "ppi": {
     "sources": ["signor", "string", "biogrid"],
     "string_score": 700,
@@ -422,7 +443,7 @@ PowerPoint と Word は `<style>` ブロックを無視するため、**計算�
     "enabled": true,
     "requested_source": "auto", "phenotype_source": "hpo",
     "gene_sources": ["hpo"], "xrefs": ["OMIM:104300", "Orphanet:1020"],
-    "xref_origin": "dbxrefs",          // selected / dbxrefs / name
+    "xref_origin": "dbxrefs",          // phenotypes / selected / dbxrefs / name
     "phenotype_count": 5, "expanded_count": 3,
     "gene_count": 6, "excluded_count": 1, "unindexed_count": 1,
     "phenotypes": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
@@ -489,6 +510,18 @@ PowerPoint と Word は `<style>` ブロックを無視するため、**計算�
 ステータスコード: `400`（入力不備・遺伝子数超過）、`404`（疾患が見つからない・
 関連遺伝子ゼロ）、`502`（Open Targets 側の障害）。
 
+### `GET /api/hpo/phenotypes?q=<症状名 または HP ID>&limit=15`
+
+HPO の表現型 (HP 用語) を検索します。遺伝子が紐づく用語のみが対象です。
+
+```jsonc
+{ "query": "HP:0002354",
+  "results": [
+    { "hpo_id": "HP:0002354", "ontology_id": "HP_0002354",
+      "name": "Memory impairment", "gene_count": 12, "exact": true }
+  ] }
+```
+
 ### `GET /api/hpo/diseases?q=<疾患名>&limit=10`
 
 HPO 自身の疾患レジストリを検索します。
@@ -516,7 +549,7 @@ HPO 自身の疾患レジストリを検索します。
 | `NW_DISEASE_TOP_N` | `100` | 疾患上位遺伝子の取得件数 |
 | `NW_MAX_WORKERS` | `5` | 遺伝子の並列処理数 |
 | `NW_STRING_SCORE` | `700` | STRING 信頼度閾値の既定値 |
-| `NW_HUB_THRESHOLD` | `1000` | ハブ判定の既定値 |
+| `NW_HUB_THRESHOLD` | `500` | ハブ判定の既定値 |
 | `NW_MAX_NODES` | `1000` | PPIパートナー上限の既定値 |
 | `NW_ENRICH_GENE_N` | `100` | エンリッチメントに使う疾患遺伝子の件数 |
 | `NW_ENRICH_MAX_TERMS` | `50` | 取得するパスウェイ数の上限 |
@@ -618,7 +651,7 @@ pytest
   curated リンクで補完します。`opentargets` 固定にした場合はスキップされ、
   `unindexed_count` に計上されます。
 - 自動の HPO 照合は疾患名の**完全一致**のみです。`dbXRefs` に OMIM / Orphanet の
-  ID がなく名前も一致しない場合は、STEP 1 の HPO 直接指定から疾患を選んでください
-  （こちらは部分一致で検索できます）。
+  ID がなく名前も一致しない場合は、STEP 1 から疾患 (OMIM / Orphanet ID) を選ぶか、
+  症状 (HP ID) を直接指定してください（どちらも部分一致で検索できます）。
 - IntAct の相互作用数が取得できない遺伝子はハブ判定の対象外です
   （取得失敗を「ハブでない」とも「ハブである」とも扱いません）。

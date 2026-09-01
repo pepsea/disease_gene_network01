@@ -153,14 +153,26 @@
       <div id="picked"></div>
     </div>
     <details id="hpo-block">
-      <summary>症状データの疾患を HPO で直接指定する（任意）</summary>
-      <p class="note" style="margin:8px 0 10px">
-        Open Targets 側で症状が取れない疾患や、OMIM / Orphanet の登録名が
-        Open Targets と異なる場合に使います。指定すると表3の症状はこの疾患のものになります。
-      </p>
+      <summary>表3の症状を手動で指定する（任意）</summary>
+
+      <p class="note" style="margin:8px 0 6px"><b>A. 症状(HP ID)を直接指定</b>
+        — 解析する症状そのものを選びます。疾患を介さないので、
+        マトリックスの列が指定したものだけになります。</p>
+      <div class="row">
+        <input id="hp-query" type="text" placeholder="例: Memory impairment / HP:0002354" autocomplete="off" style="flex:1;min-width:220px">
+        <button id="hp-search" type="button" class="secondary">HP用語を検索</button>
+      </div>
+      <div id="hp-cands"></div>
+      <div id="hp-picked"></div>
+
+      <p class="note" style="margin:16px 0 6px"><b>B. 疾患(OMIM / Orphanet ID)を指定</b>
+        — その疾患の症状一覧を HPO から取得します。HPO の疾患注釈は
+        OMIM / Orphanet / DECIPHER の ID で管理されており、HPO 独自の疾患ID体系は
+        ありません（<code>HP:</code> は症状のIDです）。
+        Open Targets 側で症状が取れない疾患や、登録名が異なる場合に使います。</p>
       <div class="row">
         <input id="hpo-query" type="text" placeholder="例: Alzheimer disease" autocomplete="off" style="flex:1;min-width:220px">
-        <button id="hpo-search" type="button" class="secondary">HPO を検索</button>
+        <button id="hpo-search" type="button" class="secondary">疾患を検索</button>
       </div>
       <div id="hpo-cands"></div>
       <div id="hpo-picked"></div>
@@ -324,7 +336,70 @@ async function searchDisease() {
   }
 }
 
-// ── HPO's own disease registry ────────────────────────────────────────────
+// ── HPO's own terms: name the symptoms outright ───────────────────────────
+let hpPicked = null;    // [{hpo_id, name, gene_count}]
+
+async function searchHpTerm() {
+  const q = $("hp-query").value.trim();
+  if (!q) return;
+  $("hp-search").disabled = true;
+  $("hp-cands").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>HP用語を検索中…（初回はデータ取得に時間がかかります）</p>';
+  try {
+    const res = await fetch("/api/hpo/phenotypes?q=" + encodeURIComponent(q));
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      $("hp-cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>";
+      return;
+    }
+    if (!data.results.length) {
+      $("hp-cands").innerHTML = '<p class="err small">該当する HP 用語が見つかりません: ' + esc(q)
+        + '<br><span class="small">遺伝子が紐づく症状のみ検索対象です。</span></p>';
+      return;
+    }
+    let html = '<div class="cands">';
+    data.results.forEach((r, i) => {
+      const on = (hpPicked || []).some((x) => x.hpo_id === r.hpo_id);
+      html += '<button type="button" class="cand' + (on ? " sel" : "") + '" data-i="' + i + '">'
+        + "<b>" + esc(r.name) + '</b><span class="id">' + esc(r.hpo_id) + "</span>"
+        + (r.exact ? ' <span class="small">— 完全一致</span>' : "")
+        + '<span class="desc">関連遺伝子 ' + r.gene_count + " 件</span></button>";
+    });
+    html += "</div>";
+    $("hp-cands").innerHTML = html;
+    $("hp-cands").querySelectorAll(".cand").forEach((btn) => {
+      btn.addEventListener("click", () => selectHpTerm(data.results[+btn.dataset.i], btn));
+    });
+  } catch (e) {
+    $("hp-cands").innerHTML = '<p class="err small">通信エラー: ' + esc(e.message) + "</p>";
+  } finally {
+    $("hp-search").disabled = false;
+  }
+}
+
+function selectHpTerm(r, btn) {
+  const already = (hpPicked || []).find((x) => x.hpo_id === r.hpo_id);
+  if (already) {
+    hpPicked = hpPicked.filter((x) => x.hpo_id !== r.hpo_id);
+    if (btn) btn.classList.remove("sel");
+  } else {
+    hpPicked = (hpPicked || []).concat([{ hpo_id: r.hpo_id, name: r.name }]);
+    if (btn) btn.classList.add("sel");
+  }
+  if (!hpPicked.length) hpPicked = null;
+  $("hp-picked").innerHTML = hpPicked
+    ? '<div class="picked">解析する症状: '
+      + hpPicked.map((x) => "<b>" + esc(x.name) + "</b>（" + esc(x.hpo_id) + "）").join(" ＋ ")
+      + '<br><span class="small">指定した場合、疾患からの症状取得は行いません。</span></div>'
+    : "";
+}
+
+function clearHpPick() {
+  hpPicked = null;
+  $("hp-picked").innerHTML = "";
+  $("hp-cands").innerHTML = "";
+}
+
+// ── HPO's disease registry (OMIM / Orphanet / DECIPHER ids) ───────────────
 let hpoPicked = null;   // [{id, name, source}]
 
 async function searchHpoDisease() {
@@ -388,8 +463,9 @@ function clearHpoPick() {
 
 function selectDisease(r, btn) {
   picked = { id: r.id, name: r.name };
-  // A new disease invalidates any HPO pick made for the previous one.
+  // A new disease invalidates any manual pick made for the previous one.
   clearHpoPick();
+  clearHpPick();
   if (!$("hpo-query").value.trim()) $("hpo-query").value = r.name;
   $("cands").querySelectorAll(".cand").forEach((b) => b.classList.remove("sel"));
   if (btn) btn.classList.add("sel");
@@ -477,7 +553,8 @@ async function run() {
   const body = { genes, ppi, enrichment: $("enrichment").checked,
                  symptoms: $("symptoms").checked,
                  symptom_source: $("symptom-source").value };
-  if (hpoPicked) body.hpo_disease_ids = hpoPicked.map((x) => x.id);
+  if (hpPicked) body.hpo_phenotype_ids = hpPicked.map((x) => x.hpo_id);
+  else if (hpoPicked) body.hpo_disease_ids = hpoPicked.map((x) => x.id);
   if (picked) { body.disease_id = picked.id; body.disease = picked.name; }
   else { body.disease = typed; }
 
@@ -603,7 +680,8 @@ function renderSymptoms(data) {
   html += '<p class="srcs-line">症状の取得元: <b>' + esc(SRC_LABEL[s.phenotype_source] || s.phenotype_source || "—")
         + "</b>"
         + (s.xrefs && s.xrefs.length
-            ? "（" + ({ selected: "指定ID", dbxrefs: "相互参照", name: "疾患名照合" }[s.xref_origin] || "ID")
+            ? "（" + ({ selected: "指定した疾患ID", dbxrefs: "相互参照",
+                        name: "疾患名照合", phenotypes: "指定したHP ID" }[s.xref_origin] || "ID")
               + ": " + s.xrefs.map(esc).join(", ") + "）"
             : "")
         + (s.gene_sources && s.gene_sources.length
@@ -1001,6 +1079,10 @@ function toCsv(d) {
 }
 
 $("search").addEventListener("click", searchDisease);
+$("hp-search").addEventListener("click", searchHpTerm);
+$("hp-query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); searchHpTerm(); }
+});
 $("hpo-search").addEventListener("click", searchHpoDisease);
 $("hpo-query").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); searchHpoDisease(); }

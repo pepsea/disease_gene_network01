@@ -267,6 +267,94 @@ def test_search_with_no_match_returns_nothing(monkeypatch):
     assert hpo.search_diseases("no such disease anywhere") == []
 
 
+# --- HP terms (HPO's own ids) ----------------------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("HP:0002354", "HP:0002354"), ("HP_0002354", "HP:0002354"),
+    ("hp0002354", "HP:0002354"), ("  HP:0002354 ", "HP:0002354"),
+    ("HP:234", ""), ("OMIM:104300", ""), ("APP", ""), ("", ""),
+])
+def test_hp_ids_are_normalised(value, expected):
+    assert hpo.normalise_hpo_id(value) == expected
+
+
+def test_only_terms_with_genes_are_listed(monkeypatch):
+    """A term with no genes cannot become a matrix column."""
+    monkeypatch.setattr(hpo, "SESSION", session())
+    listed = {p["hpo_id"] for p in hpo.list_phenotypes()}
+    assert listed == {"HP:0002354", "HP:0000726", "HP:0001300"}
+    assert "HP:0009999" not in listed
+
+
+def test_terms_carry_their_gene_count(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    by_id = {p["hpo_id"]: p for p in hpo.list_phenotypes()}
+    assert by_id["HP:0002354"]["gene_count"] == 2      # APP, MAPT
+    assert by_id["HP:0002354"]["name"] == "Memory impairment"
+
+
+def test_a_term_can_be_looked_up_by_its_id(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    got = hpo.search_phenotypes("HP:0002354")
+    assert [p["hpo_id"] for p in got] == ["HP:0002354"]
+    assert got[0]["exact"] is True
+
+
+def test_the_underscore_id_form_is_accepted_in_search(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.search_phenotypes("HP_0002354")[0]["hpo_id"] == "HP:0002354"
+
+
+def test_an_unknown_id_returns_nothing(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.search_phenotypes("HP:9999999") == []
+
+
+def test_terms_are_searched_by_name(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert [p["hpo_id"] for p in hpo.search_phenotypes("Memory impairment")] == ["HP:0002354"]
+
+
+def test_term_search_matches_partially(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert [p["hpo_id"] for p in hpo.search_phenotypes("memory")] == ["HP:0002354"]
+
+
+def test_term_search_respects_the_limit(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert len(hpo.search_phenotypes("i", limit=1)) == 1
+
+
+def test_chosen_terms_come_back_in_the_standard_shape(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    got = hpo.get_phenotypes_by_id(["HP_0002354", "HP:0000726"])
+    assert [p["hpo_id"] for p in got] == ["HP:0002354", "HP:0000726"]
+    assert got[0]["name"] == "Memory impairment"
+    assert got[0]["ontology_id"] == "HP_0002354"
+    # Nothing is inferred: no disease annotation is involved.
+    assert got[0]["excluded"] is False
+    assert got[0]["frequency"] == "" and got[0]["resources"] == []
+
+
+def test_chosen_terms_keep_the_given_order_and_deduplicate(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    got = hpo.get_phenotypes_by_id(["HP:0000726", "HP:0002354", "HP_0000726"])
+    assert [p["hpo_id"] for p in got] == ["HP:0000726", "HP:0002354"]
+
+
+def test_invalid_term_ids_are_dropped(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.get_phenotypes_by_id(["OMIM:104300", "", "nonsense", None]) == []
+
+
+def test_an_unannotated_term_is_still_returned_with_zero_genes(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    got = hpo.get_phenotypes_by_id(["HP:0009999"])
+    assert got[0]["hpo_id"] == "HP:0009999"
+    assert got[0]["gene_count"] == 0
+    assert got[0]["name"] == "HP:0009999"     # no label available, not invented
+
+
 # --- degraded inputs -------------------------------------------------------
 
 def test_files_are_downloaded_once(monkeypatch):

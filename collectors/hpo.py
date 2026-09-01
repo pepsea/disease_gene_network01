@@ -399,6 +399,105 @@ def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
     ]
 
 
+_HP_ID = re.compile(r"^HP[:_]?(\d{7})$", re.I)
+
+
+def normalise_hpo_id(value: str) -> str:
+    """Canonicalise an HP term id to the ``HP:0002354`` form."""
+    match = _HP_ID.match(str(value or "").strip())
+    return f"HP:{match.group(1)}" if match else ""
+
+
+def list_phenotypes() -> list[dict[str, Any]]:
+    """Every HP term with curated genes, as ``{"hpo_id", "name", "gene_count"}``.
+
+    Terms without genes are left out: they cannot become a matrix column.
+    """
+    genes, names = _load_genes()
+    return [
+        {
+            "hpo_id": hpo_id,
+            "ontology_id": hpo_id.replace(":", "_"),
+            "name": names.get(hpo_id, hpo_id),
+            "gene_count": len(symbols),
+        }
+        for hpo_id, symbols in genes.items()
+    ]
+
+
+def search_phenotypes(query: str, limit: int = 15) -> list[dict[str, Any]]:
+    """Search HP terms by name, or look one up by its id.
+
+    ``HP:0002354`` (or ``HP_0002354``) returns that term directly; anything else
+    is matched against term names, exact first, then prefix, then substring, and
+    within a tier the better-annotated term first.
+    """
+    raw = (query or "").strip()
+    if not raw:
+        return []
+
+    exact_id = normalise_hpo_id(raw)
+    if exact_id:
+        for phenotype in list_phenotypes():
+            if phenotype["hpo_id"] == exact_id:
+                return [{**phenotype, "exact": True}]
+        return []
+
+    wanted = raw.casefold()
+    scored: list[tuple[int, int, str, dict[str, Any]]] = []
+    for phenotype in list_phenotypes():
+        name = phenotype["name"].casefold()
+        if name == wanted:
+            tier = 0
+        elif name.startswith(wanted):
+            tier = 1
+        elif wanted in name:
+            tier = 2
+        else:
+            continue
+        scored.append((tier, -phenotype["gene_count"], phenotype["name"], phenotype))
+
+    scored.sort(key=lambda row: row[:3])
+    return [
+        {**phenotype, "exact": tier == 0}
+        for tier, _, _, phenotype in scored[: max(1, int(limit))]
+    ]
+
+
+def get_phenotypes_by_id(hpo_ids: list[str]) -> list[dict[str, Any]]:
+    """Return the standard phenotype entries for the given HP term ids.
+
+    Used when the symptoms are chosen directly rather than derived from a
+    disease, so there is no disease annotation to carry: no frequency, no
+    source, and nothing is excluded — the caller asked for these terms.
+    """
+    _, names = _load_genes()
+    genes, _ = _load_genes()
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in hpo_ids or []:
+        hpo_id = normalise_hpo_id(value)
+        if not hpo_id or hpo_id in seen:
+            continue
+        seen.add(hpo_id)
+        out.append(
+            {
+                "hpo_id": hpo_id,
+                "ontology_id": hpo_id.replace(":", "_"),
+                "name": names.get(hpo_id, hpo_id),
+                "description": "",
+                "frequency": "",
+                "aspect": "P",
+                "resources": [],
+                "resource": "",
+                "excluded": False,
+                "gene_count": len(genes.get(hpo_id, ())),
+            }
+        )
+    return out
+
+
 def find_disease_ids_by_name(name: str, limit: int = 5) -> list[str]:
     """Look up OMIM / ORPHA ids by an exact disease name.
 

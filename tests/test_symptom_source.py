@@ -143,6 +143,53 @@ def test_the_xref_origin_is_recorded(patched):
     assert meta["xref_origin"] == "name"
 
 
+# --- symptoms named directly by HP id --------------------------------------
+
+CHOSEN_TERMS = [
+    {"hpo_id": "HP:0002354", "ontology_id": "HP_0002354", "name": "Memory impairment",
+     "frequency": "", "aspect": "P", "resources": [], "resource": "",
+     "excluded": False, "gene_count": 3},
+]
+
+
+def test_chosen_hp_terms_outrank_everything(patched):
+    def should_not_run(*a, **k):
+        raise AssertionError("no disease lookup should happen for chosen HP terms")
+    patched.setattr(app_module, "get_disease_phenotypes", should_not_run)
+    patched.setattr(app_module, "get_disease_xrefs", should_not_run)
+    patched.setattr(app_module.hpo, "get_disease_phenotypes", should_not_run)
+    patched.setattr(app_module.hpo, "get_phenotypes_by_id",
+                    lambda ids: [dict(t) for t in CHOSEN_TERMS])
+
+    phenotypes, meta = collect_symptoms("EFO_1", "AD", "auto", 50,
+                                        hpo_disease_ids=["ORPHA:1020"],
+                                        hpo_phenotype_ids=["HP:0002354"])
+    assert meta["phenotype_source"] == "hpo"
+    assert meta["xref_origin"] == "phenotypes"
+    assert meta["xrefs"] == ["HP:0002354"]
+    assert [p["hpo_id"] for p in phenotypes] == ["HP:0002354"]
+
+
+def test_chosen_terms_use_hpo_genes(patched):
+    patched.setattr(app_module.hpo, "get_phenotypes_by_id",
+                    lambda ids: [dict(t) for t in CHOSEN_TERMS])
+    _, meta = collect_symptoms("EFO_1", "AD", "auto", 50, hpo_phenotype_ids=["HP:0002354"])
+    assert meta["gene_fetcher"] is app_module._hpo_gene_fetcher
+
+
+def test_blank_term_ids_fall_through_to_the_normal_path(patched):
+    _, meta = collect_symptoms("EFO_1", "AD", "auto", 50, hpo_phenotype_ids=["", "  "])
+    assert meta["phenotype_source"] == "opentargets"
+
+
+def test_terms_that_resolve_to_nothing_do_not_claim_a_source(patched):
+    patched.setattr(app_module.hpo, "get_phenotypes_by_id", lambda ids: [])
+    phenotypes, meta = collect_symptoms("EFO_1", "AD", "auto", 50,
+                                        hpo_phenotype_ids=["OMIM:104300"])
+    assert phenotypes == []
+    assert meta["phenotype_source"] == ""
+
+
 # --- gene fetchers ---------------------------------------------------------
 
 def test_hpo_sourced_symptoms_use_hpo_genes(patched):

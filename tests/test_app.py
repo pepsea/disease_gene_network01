@@ -804,6 +804,60 @@ def test_a_non_list_selection_is_ignored(client):
     assert body["symptoms"]["phenotype_source"] == "opentargets"
 
 
+def test_hp_term_search_endpoint(monkeypatch, client):
+    monkeypatch.setattr(app_module.hpo, "search_phenotypes", lambda q, limit=15: [
+        {"hpo_id": "HP:0002354", "ontology_id": "HP_0002354",
+         "name": "Memory impairment", "gene_count": 12, "exact": True},
+    ])
+    body = client.get("/api/hpo/phenotypes?q=HP:0002354").get_json()
+    assert body["results"][0]["hpo_id"] == "HP:0002354"
+
+
+def test_hp_term_search_requires_a_query(client):
+    assert client.get("/api/hpo/phenotypes?q= ").status_code == 400
+
+
+def test_chosen_hp_terms_drive_the_matrix(monkeypatch, client):
+    def should_not_run(*a, **k):
+        raise AssertionError("no disease lookup for chosen HP terms")
+    monkeypatch.setattr(app_module, "get_disease_phenotypes", should_not_run)
+    monkeypatch.setattr(app_module.hpo, "get_phenotypes_by_id", lambda ids: [
+        dict(p) for p in PHENOTYPES if p["hpo_id"] in ids])
+    body = client.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"],
+        "hpo_phenotype_ids": ["HP:0002354", "HP:0000726"],
+    }).get_json()
+    sym = body["symptoms"]
+    assert sym["phenotype_source"] == "hpo"
+    assert sym["xref_origin"] == "phenotypes"
+    assert sym["xrefs"] == ["HP:0002354", "HP:0000726"]
+
+
+def test_hp_terms_take_precedence_over_a_chosen_disease(monkeypatch, client):
+    monkeypatch.setattr(app_module.hpo, "get_phenotypes_by_id",
+                        lambda ids: [dict(PHENOTYPES[0])])
+    def should_not_run(ids, limit=50):
+        raise AssertionError("the disease path must not run")
+    monkeypatch.setattr(app_module.hpo, "get_disease_phenotypes", should_not_run)
+    body = client.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"],
+        "hpo_disease_ids": ["ORPHA:1020"], "hpo_phenotype_ids": ["HP:0002354"],
+    }).get_json()
+    assert body["symptoms"]["xref_origin"] == "phenotypes"
+
+
+def test_chosen_hp_terms_are_capped_at_the_expansion_limit(monkeypatch, patched):
+    captured = {}
+    monkeypatch.setattr(app_module.hpo, "get_phenotypes_by_id",
+                        lambda ids: captured.update(ids=ids) or [])
+    c = create_app({"TESTING": True, "SYMPTOM_MAX_PHENOTYPES": 3}).test_client()
+    c.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"],
+        "hpo_phenotype_ids": [f"HP:{i:07d}" for i in range(20)],
+    })
+    assert len(captured["ids"]) == 3
+
+
 # --- pages -----------------------------------------------------------------
 
 def test_index_page_renders(client):

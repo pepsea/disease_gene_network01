@@ -149,13 +149,13 @@ def test_parse_genes(raw, expected):
 # --- parse_ppi_options -----------------------------------------------------
 
 DEFAULTS = {"sources": ["signor", "string"], "string_score": 700,
-            "hub_threshold": 1000, "max_nodes": 100, "exclude_hubs": True}
+            "hub_threshold": 1000, "max_nodes": 1000, "exclude_hubs": True}
 
 
 def test_ppi_defaults_apply_when_absent():
     assert parse_ppi_options(None, DEFAULTS) == {
         "sources": ["signor", "string"], "string_score": 700, "min_score": None,
-        "hub_threshold": 1000, "max_nodes": 100, "exclude_hubs": True,
+        "hub_threshold": 1000, "max_nodes": 1000, "exclude_hubs": True,
     }
 
 
@@ -190,7 +190,8 @@ def test_min_score_is_parsed_and_clamped(value, expected):
 def test_hub_threshold_and_max_nodes_are_clamped():
     opts = parse_ppi_options({"hub_threshold": 50, "max_nodes": 9999}, DEFAULTS)
     assert opts["hub_threshold"] == 50
-    assert opts["max_nodes"] == 500
+    assert opts["max_nodes"] == 5000
+    assert parse_ppi_options({"max_nodes": 1000}, DEFAULTS)["max_nodes"] == 1000
 
 
 def test_exclude_hubs_can_be_turned_off():

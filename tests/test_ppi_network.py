@@ -25,9 +25,9 @@ def string_rows(gene, *pairs):
 def patch_sources(monkeypatch, signor=(), string=(), biogrid=()):
     monkeypatch.setattr(net.signor, "get_interactions", lambda g: list(signor))
     monkeypatch.setattr(net.string_db, "get_interactions",
-                        lambda g, required_score=400: list(string))
+                        lambda g, required_score=400, **kw: list(string))
     monkeypatch.setattr(net.biogrid, "get_interactions",
-                        lambda g, api_key=None: list(biogrid))
+                        lambda g, api_key=None, **kw: list(biogrid))
 
 
 # --- source selection ------------------------------------------------------
@@ -37,9 +37,9 @@ def test_only_selected_sources_are_queried(monkeypatch):
     monkeypatch.setattr(net.signor, "get_interactions",
                         lambda g: called.append("signor") or [])
     monkeypatch.setattr(net.string_db, "get_interactions",
-                        lambda g, required_score=400: called.append("string") or [])
+                        lambda g, required_score=400, **kw: called.append("string") or [])
     monkeypatch.setattr(net.biogrid, "get_interactions",
-                        lambda g, api_key=None: called.append("biogrid") or [])
+                        lambda g, api_key=None, **kw: called.append("biogrid") or [])
 
     net.collect_ppi_partners("APP", sources=["string"])
     assert called == ["string"]
@@ -52,9 +52,9 @@ def test_only_selected_sources_are_queried(monkeypatch):
 def test_biogrid_is_skipped_without_a_key(monkeypatch):
     called = []
     monkeypatch.setattr(net.signor, "get_interactions", lambda g: [])
-    monkeypatch.setattr(net.string_db, "get_interactions", lambda g, required_score=400: [])
+    monkeypatch.setattr(net.string_db, "get_interactions", lambda g, required_score=400, **kw: [])
     monkeypatch.setattr(net.biogrid, "get_interactions",
-                        lambda g, api_key=None: called.append("biogrid") or [])
+                        lambda g, api_key=None, **kw: called.append("biogrid") or [])
     net.collect_ppi_partners("APP", sources=["biogrid"], biogrid_api_key="")
     assert called == []
 
@@ -63,7 +63,7 @@ def test_string_threshold_is_passed_through(monkeypatch):
     seen = {}
     monkeypatch.setattr(net.signor, "get_interactions", lambda g: [])
     monkeypatch.setattr(net.string_db, "get_interactions",
-                        lambda g, required_score=400: seen.update(score=required_score) or [])
+                        lambda g, required_score=400, **kw: seen.update(score=required_score) or [])
     net.collect_ppi_partners("APP", sources=["string"], string_required_score=900)
     assert seen["score"] == 900
 
@@ -81,8 +81,8 @@ def test_one_failing_source_does_not_break_the_others(monkeypatch):
         raise RuntimeError("signor down")
     monkeypatch.setattr(net.signor, "get_interactions", boom)
     monkeypatch.setattr(net.string_db, "get_interactions",
-                        lambda g, required_score=400: string_rows("APP", ("T1", 0.9)))
-    monkeypatch.setattr(net.biogrid, "get_interactions", lambda g, api_key=None: [])
+                        lambda g, required_score=400, **kw: string_rows("APP", ("T1", 0.9)))
+    monkeypatch.setattr(net.biogrid, "get_interactions", lambda g, api_key=None, **kw: [])
     assert net.collect_ppi_partners("APP", sources=["signor", "string"])["partners"] == ["T1"]
 
 

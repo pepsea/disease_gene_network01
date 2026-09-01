@@ -22,7 +22,7 @@ TIMEOUT = (5, 20)
 
 
 def get_interactions(
-    gene_symbol: str, api_key: Optional[str] = None
+    gene_symbol: str, api_key: Optional[str] = None, max_results: int = 200
 ) -> list[dict[str, Any]]:
     """Return BioGRID PPIs for ``gene_symbol``.
 
@@ -45,7 +45,7 @@ def get_interactions(
         "interSpeciesExcluded": "true",
         "selfInteractionsExcluded": "true",
         "format": "json",
-        "max": 200,
+        "max": max(1, int(max_results)),
         "start": 0,
     }
 

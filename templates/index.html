@@ -96,6 +96,14 @@
     border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
   @keyframes spin{to{transform:rotate(360deg)}}
   .table-scroll{overflow-x:auto}
+  /* Applied only while building the clipboard copy, so a dark-mode page still
+     yields a light table for slides. */
+  .force-light{--panel:#fff;--border:#e2e5ea;--text:#1c2024;--muted:#6b7280;
+    --accent:#2563eb;--strong:#15803d;--moderate:#b45309;--weak:#6b7280;
+    --danger:#b91c1c;--soft:#f3f4f6;
+    /* An inherited colour is already resolved, so redefining the variables is
+       not enough — the table needs its own light colour to hand down. */
+    color:var(--text);background-color:var(--panel)}
   .tabletitle{font-size:15px;font-weight:700;margin:0 0 4px}
   .tablesub{font-size:12px;color:var(--muted);margin:0 0 12px}
   .terms{font-size:12px;color:var(--muted);line-height:1.5}
@@ -118,6 +126,9 @@
   .matrix tbody tr:hover td{background:color-mix(in srgb,var(--accent) 7%,transparent)}
   .matrix tbody tr:hover td.gene{background:color-mix(in srgb,var(--accent) 10%,transparent)}
   .selfdot{color:var(--moderate);font-size:10px;vertical-align:2px}
+  .sigtag{display:inline-block;font-size:10px;font-weight:700;color:var(--strong);
+    border:1px solid color-mix(in srgb,var(--strong) 45%,transparent);
+    padding:0 4px;border-radius:3px;margin-top:2px}
   .freq{display:block;font-weight:400;color:var(--muted);font-size:10px;margin-top:2px}
   .srcs-line{font-size:11px;color:var(--muted);margin:0 0 10px}
   .viatag{font-size:10px;font-weight:700;color:var(--moderate);
@@ -203,7 +214,7 @@
       </div>
       <div>
         <label for="max-nodes">PPIパートナー上限</label>
-        <input type="number" id="max-nodes" min="1" max="500" step="10" value="{{ ppi_defaults.max_nodes }}">
+        <input type="number" id="max-nodes" min="1" max="5000" step="50" value="{{ ppi_defaults.max_nodes }}">
         <div class="note">ランキング上位から採用</div>
       </div>
       <div>
@@ -505,7 +516,8 @@ function render(data) {
     html += '<p class="small err">BioGRID はAPIキー未設定のためスキップされました。</p>';
   }
 
-  html += '<div class="table-scroll"><table><thead><tr>'
+  html += copyBar("t1");
+  html += '<div class="table-scroll"><table data-table="t1"><thead><tr>'
         + "<th>遺伝子</th><th>加重重複率<br><span class=\"small\">スコア加重</span></th>"
         + "<th>単純重複率<br><span class=\"small\">遺伝子数ベース</span></th>"
         + "<th>重複遺伝子数</th><th>ターゲット自身</th><th>重複遺伝子（上位5件）</th>"
@@ -551,6 +563,8 @@ function render(data) {
   html += renderEnrichment(data);
   html += renderSymptoms(data);
   $("result").innerHTML = html;
+  bindCopyButtons();
+  bindSymptomSort();
 }
 
 // ── Table 3: overlap with genes behind the disease's symptoms ─────────────
@@ -629,12 +643,27 @@ function renderSymptoms(data) {
     return html;
   }
 
-  // Rank by the mean across symptoms.
+  const sortKey = window.__symptomSort || "mean";
+  const SORTERS = {
+    mean: (a, b) => b.symptom_mean_percent - a.symptom_mean_percent,
+    breadth: (a, b) => (b.symptom_breadth_count || 0) - (a.symptom_breadth_count || 0)
+                       || b.symptom_mean_percent - a.symptom_mean_percent,
+    significance: (a, b) => (a.symptom_q_value ?? 1) - (b.symptom_q_value ?? 1)
+                            || b.symptom_mean_percent - a.symptom_mean_percent,
+  };
   const rows = data.results
     .filter((r) => !r.error && r.symptom_mean_percent != null)
     .slice()
-    .sort((a, b) => b.symptom_mean_percent - a.symptom_mean_percent);
+    .sort(SORTERS[sortKey] || SORTERS.mean);
   const skipped = data.results.filter((r) => r.error || r.symptom_mean_percent == null);
+
+  html += '<div class="row" style="margin-bottom:10px">'
+    + '<label for="sym-sort" style="margin:0;font-size:13px">並び替え</label>'
+    + '<select id="sym-sort" style="width:auto;padding:6px 10px">'
+    + '<option value="mean"' + (sortKey === "mean" ? " selected" : "") + ">総合（平均）</option>"
+    + '<option value="breadth"' + (sortKey === "breadth" ? " selected" : "") + ">カバー症状数</option>"
+    + '<option value="significance"' + (sortKey === "significance" ? " selected" : "") + ">有意性（q値）</option>"
+    + "</select></div>";
 
   const cellStyle = (v) => {
     if (v <= 0) return "";
@@ -643,7 +672,8 @@ function renderSymptoms(data) {
          + '%,transparent);color:' + (a > 0.5 ? "#fff" : "inherit") + '"';
   };
 
-  html += '<div class="table-scroll"><table class="matrix"><thead><tr>'
+  html += copyBar("t3");
+  html += '<div class="table-scroll"><table class="matrix" data-table="t3"><thead><tr>'
         + '<th class="rank">#</th><th class="gene">遺伝子</th>';
   for (const c of cols) {
     html += "<th>" + esc(c.name)
@@ -654,7 +684,9 @@ function renderSymptoms(data) {
           + (c.gene_source === "hpo" ? '<span class="freq">遺伝子: HPO</span>' : "")
           + "</th>";
   }
-  html += '<th class="mean">総合<br><span class="small">平均</span></th></tr></thead><tbody>';
+  html += '<th class="mean">カバー<br><span class="small">症状数</span></th>'
+        + '<th>有意性<br><span class="small">q値(FDR)</span></th>'
+        + '<th class="mean">総合<br><span class="small">平均</span></th></tr></thead><tbody>';
 
   rows.forEach((r, i) => {
     const cells = {};
@@ -675,12 +707,21 @@ function renderSymptoms(data) {
     }
     const m = r.symptom_mean_percent;
     const cls = m >= STRONG * 100 ? "strong" : m >= MODERATE * 100 ? "moderate" : "weak";
-    html += '<td class="mean"><span class="pct ' + cls + '">' + m.toFixed(1) + "%</span></td></tr>";
+    const q = r.symptom_q_value;
+    const sig = q != null && q < 0.05;
+    html += '<td class="mean">' + (r.symptom_breadth_count ?? 0) + " / " + (r.symptom_tested_count ?? 0)
+      + '<div class="small">' + (r.symptom_breadth_percent ?? 0).toFixed(0) + "%</div></td>"
+      + '<td class="num">'
+      + (q == null ? "—"
+          : '<span class="' + (sig ? "pct strong" : "small") + '">' + fmtQ(q) + "</span>"
+            + (sig ? '<div class="sigtag">有意</div>' : ""))
+      + "</td>"
+      + '<td class="mean"><span class="pct ' + cls + '">' + m.toFixed(1) + "%</span></td></tr>";
   });
 
   for (const r of skipped) {
     html += '<tr><td class="rank">—</td><td class="gene"><b>' + esc(r.gene) + "</b></td>"
-      + '<td colspan="' + (cols.length + 1) + '" class="small">'
+      + '<td colspan="' + (cols.length + 3) + '" class="small">'
       + (r.error ? '<span class="err">' + esc(r.error) + "</span>" : "—") + "</td></tr>";
   }
   html += "</tbody></table></div>";
@@ -690,7 +731,13 @@ function renderSymptoms(data) {
         + "（表1と同様、自身も含めて数えます）。列見出しの2行目は頻度と注釈の出典"
         + "（ORPHANET / OMIM / DECIPHER など）です。<br>"
         + "症状由来遺伝子のスコアは、その遺伝子が関与する各症状での関連スコアの合計です。"
-        + "「この疾患に伴わない」と注釈された症状は対象外です。</p>";
+        + "「この疾患に伴わない」と注釈された症状は対象外です。<br>"
+        + "<b>カバー症状数</b> = 重複が1件以上あった症状の数。<b>q値</b> = 各症状で"
+        + "「PPIネットワークとその症状の遺伝子群の重複が偶然より多いか」を超幾何検定で調べ、"
+        + "全症状を Fisher の方法で統合し、遺伝子間で Benjamini-Hochberg 補正した値です"
+        + "（背景遺伝子数 " + (s.background || 20000) + "）。<br>"
+        + "<b>多くの症状に中程度に関わる遺伝子ほど有意になります</b> — "
+        + "1症状だけ強く当たる遺伝子より、5症状に一貫して当たる遺伝子が上位に来ます。</p>";
   html += "</div>";
   return html;
 }
@@ -719,7 +766,8 @@ function renderEnrichment(data) {
       + "</p>";
   }
 
-  html += '<div class="table-scroll"><table><thead><tr>'
+  html += copyBar("t2");
+  html += '<div class="table-scroll"><table data-table="t2"><thead><tr>'
         + "<th>遺伝子</th><th>加重パスウェイ重複率<br><span class=\"small\">有意度(-log10 p)加重</span></th>"
         + "<th>単純パスウェイ重複率<br><span class=\"small\">パスウェイ数ベース</span></th>"
         + "<th>ターゲット自身の該当</th><th>重複パスウェイ（上位5件）</th>"
@@ -770,6 +818,154 @@ function renderEnrichment(data) {
   return html;
 }
 
+// ── Copy a table to the clipboard ─────────────────────────────────────────
+// PowerPoint and Word read the text/html clipboard flavour but ignore <style>
+// blocks, so the computed styles are baked onto each cell as inline
+// attributes. The result pastes as a real, editable table with its colours.
+// Office understands #rrggbb, not CSS Color 4's color(srgb ...) — and it has
+// no useful notion of alpha in a table cell, so translucent heat colours are
+// composited onto white and emitted solid.
+function toHex(value) {
+  if (!value) return "";
+  let r, g, b, a = 1;
+  let m = value.match(/^color\(srgb\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)(?:\s*\/\s*([\d.eE+-]+))?\s*\)$/);
+  if (m) {
+    r = parseFloat(m[1]) * 255; g = parseFloat(m[2]) * 255; b = parseFloat(m[3]) * 255;
+    a = m[4] === undefined ? 1 : parseFloat(m[4]);
+  } else {
+    m = value.match(/^rgba?\(([^)]+)\)$/);
+    if (!m) return null;
+    const parts = m[1].split(/[,\s/]+/).filter(Boolean).map(parseFloat);
+    if (parts.length < 3) return null;
+    r = parts[0]; g = parts[1]; b = parts[2];
+    a = parts.length > 3 ? parts[3] : 1;
+  }
+  if (!isFinite(a)) a = 1;
+  const mix = (c) => Math.max(0, Math.min(255, Math.round(c * a + 255 * (1 - a))));
+  return "#" + [mix(r), mix(g), mix(b)]
+    .map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+const COPY_BORDER = "1px solid #d7dbe0";
+
+function inlineStyles(source, clone) {
+  const computed = getComputedStyle(source);
+  const parts = [];
+  const bg = toHex(computed.getPropertyValue("background-color"));
+  // White is the default; emitting it everywhere just bloats the paste.
+  if (bg && bg !== "#ffffff") parts.push("background-color:" + bg);
+  const fg = toHex(computed.getPropertyValue("color"));
+  if (fg) parts.push("color:" + fg);
+  for (const prop of ["font-weight", "font-size", "text-align"]) {
+    const value = computed.getPropertyValue(prop);
+    if (value && value !== "normal") parts.push(prop + ":" + value);
+  }
+  const tag = source.tagName;
+  if (tag === "TD" || tag === "TH") {
+    parts.push("border:" + COPY_BORDER, "padding:5px 8px");
+  }
+  // Sticky columns make no sense once pasted.
+  parts.push("position:static");
+  clone.setAttribute("style", parts.join(";"));
+  const srcKids = source.children, cloneKids = clone.children;
+  for (let i = 0; i < srcKids.length && i < cloneKids.length; i++) {
+    inlineStyles(srcKids[i], cloneKids[i]);
+  }
+}
+
+function tableToHtml(table) {
+  // Compute against the light palette so the paste looks the same whether the
+  // page is being viewed in light or dark mode.
+  table.classList.add("force-light");
+  void table.offsetHeight;   // force a style recalculation
+  let clone;
+  try {
+    clone = table.cloneNode(true);
+    inlineStyles(table, clone);
+  } finally {
+    table.classList.remove("force-light");
+  }
+  clone.classList.remove("force-light");
+  // Progress bars are decoration; they paste as empty boxes.
+  clone.querySelectorAll(".bar").forEach((el) => el.remove());
+  clone.setAttribute("border", "1");
+  clone.setAttribute("cellspacing", "0");
+  clone.setAttribute("cellpadding", "4");
+  clone.setAttribute("style", (clone.getAttribute("style") || "")
+    + ";border-collapse:collapse;background-color:#ffffff");
+  return '<meta charset="utf-8">' + clone.outerHTML;
+}
+
+function tableToTsv(table) {
+  return Array.from(table.querySelectorAll("tr")).map((row) =>
+    Array.from(row.querySelectorAll("th,td"))
+      .map((c) => c.innerText.replace(/\s*\n\s*/g, " ").trim())
+      .join("\t")
+  ).join("\n");
+}
+
+async function copyTable(table, button, asText) {
+  const label = button.textContent;
+  const tsv = tableToTsv(table);
+  try {
+    if (asText) {
+      await navigator.clipboard.writeText(tsv);
+    } else {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/html": new Blob([tableToHtml(table)], { type: "text/html" }),
+        "text/plain": new Blob([tsv], { type: "text/plain" }),
+      })]);
+    }
+    button.textContent = "コピーしました";
+  } catch (e) {
+    // Older browsers, or a denied permission: fall back to selecting the table.
+    try {
+      const range = document.createRange();
+      range.selectNode(table);
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(range);
+      document.execCommand("copy");
+      sel.removeAllRanges();
+      button.textContent = "コピーしました";
+    } catch (e2) {
+      button.textContent = "コピーできません";
+    }
+  }
+  setTimeout(() => { button.textContent = label; }, 1600);
+}
+
+function copyBar(id) {
+  return '<div class="row" style="margin-bottom:10px">'
+    + '<button type="button" class="secondary copy-html" data-t="' + id + '">'
+    + "表をコピー（PowerPoint / Word）</button>"
+    + '<button type="button" class="secondary copy-tsv" data-t="' + id + '">'
+    + "TSVでコピー（Excel）</button></div>";
+}
+
+function bindSymptomSort() {
+  const sel = $("sym-sort");
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    window.__symptomSort = sel.value;
+    if (lastData) render(lastData);
+  });
+}
+
+function bindCopyButtons() {
+  document.querySelectorAll(".copy-html, .copy-tsv").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const table = document.querySelector('[data-table="' + btn.dataset.t + '"]');
+      if (table) copyTable(table, btn, btn.classList.contains("copy-tsv"));
+    });
+  });
+}
+
+function fmtQ(q) {
+  if (q >= 0.01) return q.toFixed(3);
+  if (q === 0) return "<1e-300";
+  return q.toExponential(1);
+}
+
 function toCsv(d) {
   const rows = [["gene", "input_gene", "symbol_status", "hgnc_id", "weighted_percent",
                  "overlap_percent", "matched_count", "overlap_count", "ppi_partner_count",
@@ -792,6 +988,8 @@ function toCsv(d) {
       r.symptom_weighted_percent ?? "", r.symptom_overlap_percent ?? "",
       r.symptom_matched_count ?? "", r.symptom_overlap_count ?? "",
       r.symptom_gene_count ?? "", r.symptom_mean_percent ?? "",
+      r.symptom_breadth_count ?? "", r.symptom_tested_count ?? "",
+      r.symptom_p_value ?? "", r.symptom_q_value ?? "",
       ...symCols.map((c) => {
         const hit = (r.symptom_cells || []).find((x) => x.hpo_id === c.hpo_id);
         return hit ? hit.percent : "";

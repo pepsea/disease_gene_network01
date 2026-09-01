@@ -30,6 +30,7 @@ from collectors.opentargets import (
 )
 from enrichment_overlap import calc_enrichment_overlap
 from nw_overlap import MODERATE_THRESHOLD, STRONG_THRESHOLD, calc_network_overlap
+from symptom_stats import DEFAULT_BACKGROUND, apply_fdr, score_symptom_breadth
 from symptom_genes import (
     DEFAULT_GENES_PER_PHENOTYPE,
     DEFAULT_MAX_PHENOTYPES,
@@ -136,7 +137,7 @@ def parse_ppi_options(raw: Any, defaults: dict[str, Any]) -> dict[str, Any]:
         "string_score": _num("string_score", int, 0, 1000, defaults["string_score"]),
         "min_score": min_score,
         "hub_threshold": _num("hub_threshold", int, 1, 10_000_000, defaults["hub_threshold"]),
-        "max_nodes": _num("max_nodes", int, 1, 500, defaults["max_nodes"]),
+        "max_nodes": _num("max_nodes", int, 1, 5000, defaults["max_nodes"]),
         "exclude_hubs": bool(raw.get("exclude_hubs", defaults["exclude_hubs"])),
     }
 
@@ -156,6 +157,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         SYMPTOM_MAX_PHENOTYPES=_env_int("NW_SYMPTOM_MAX", DEFAULT_MAX_PHENOTYPES),
         SYMPTOM_GENES_PER=_env_int("NW_SYMPTOM_GENES_PER", DEFAULT_GENES_PER_PHENOTYPE),
         SYMPTOM_SOURCE=os.environ.get("NW_SYMPTOM_SOURCE", "auto"),
+        SYMPTOM_BACKGROUND=_env_int("NW_SYMPTOM_BACKGROUND", DEFAULT_BACKGROUND),
         PPI_DEFAULTS={
             "sources": list(DEFAULT_SOURCES),
             "string_score": _env_int("NW_STRING_SCORE", DEFAULT_STRING_SCORE),
@@ -396,6 +398,17 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                     if cells
                     else 0.0
                 )
+                # Is this gene's spread across symptoms more than chance? A
+                # hypergeometric test per symptom, combined with Fisher's
+                # method, so consistent coverage of many symptoms outweighs one
+                # strong hit.
+                symptom_overlap.update(
+                    score_symptom_breadth(
+                        cells,
+                        ppi_partner_count=overlap["ppi_partner_count"],
+                        background=app.config["SYMPTOM_BACKGROUND"],
+                    )
+                )
 
             enrichment: dict[str, Any] = {}
             if want_enrichment and disease_pathways:
@@ -436,6 +449,10 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                         }
                     )
 
+        # Every gene was tested against the same symptom set, so correct for
+        # multiple testing across them.
+        apply_fdr(results)
+
         results.sort(key=lambda r: r.get("weighted_score", 0), reverse=True)
 
         return jsonify(
@@ -465,6 +482,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                     ),
                     "xrefs": symptom_meta.get("xrefs", []),
                     "xref_origin": symptom_meta.get("xref_origin", ""),
+                    "background": app.config["SYMPTOM_BACKGROUND"],
                     "phenotype_count": len(phenotypes),
                     "expanded_count": len(symptom_set["expanded"]),
                     "gene_count": len(symptom_genes),

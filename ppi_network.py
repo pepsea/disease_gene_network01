@@ -64,7 +64,7 @@ DB_SCORE_PRIORITY = ["SIGNOR", "BioGRID", "STRING"]
 
 DEFAULT_SOURCES = ("signor", "string")
 DEFAULT_STRING_SCORE = 700
-DEFAULT_MAX_NODES = 100
+DEFAULT_MAX_NODES = 1000
 
 
 def is_hub_family(gene_symbol: str) -> bool:
@@ -133,6 +133,7 @@ def build_ppi_network(
     biogrid_api_key: Optional[str] = None,
     string_required_score: int = DEFAULT_STRING_SCORE,
     min_score: Optional[float] = None,
+    source_limit: int = DEFAULT_MAX_NODES,
 ) -> nx.Graph:
     """Build the interaction graph around ``gene_symbol`` from the chosen sources.
 
@@ -140,6 +141,9 @@ def build_ppi_network(
         use_signor / use_string / use_biogrid: which sources to query.
         string_required_score: STRING's own 0-1000 confidence threshold.
         min_score: drop edges scoring below this after the sources are merged.
+        source_limit: how many interactions to request from each source. Kept in
+            step with the partner cap, so raising the cap actually widens the
+            per-source fetch rather than being capped by STRING's own default.
 
     Every source is best-effort: one failing leaves the others intact.
     """
@@ -221,7 +225,9 @@ def build_ppi_network(
         try:
             add_edges(
                 string_db.get_interactions(
-                    gene_symbol, required_score=string_required_score
+                    gene_symbol,
+                    required_score=string_required_score,
+                    max_results=source_limit,
                 ),
                 "STRING",
             )
@@ -230,7 +236,12 @@ def build_ppi_network(
 
     if use_biogrid:
         try:
-            add_edges(biogrid.get_interactions(gene_symbol, api_key=biogrid_api_key), "BioGRID")
+            add_edges(
+                biogrid.get_interactions(
+                    gene_symbol, api_key=biogrid_api_key, max_results=source_limit
+                ),
+                "BioGRID",
+            )
         except Exception as exc:
             log.warning("[BioGRID] %s: %s", gene_symbol, exc)
 
@@ -349,6 +360,7 @@ def collect_ppi_partners(
         biogrid_api_key=biogrid_api_key,
         string_required_score=string_required_score,
         min_score=min_score,
+        source_limit=max(1, int(max_nodes)),
     )
 
     center = (gene_symbol or "").strip().upper()

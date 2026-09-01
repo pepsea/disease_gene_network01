@@ -61,6 +61,10 @@ gunicorn -c gunicorn.conf.py app:app           # 本番同等
 `Alzheimer disease 2` に負けないようにするため）。
 `EFO_0000249` のようなオントロジーIDを直接入力すると検索を省略します。
 
+候補は**最大200件まで取得し、リストはスクロール**できます。ヒット件数と表示件数
+を候補リストの下に出すので、絞り込みが必要かどうかが分かります。サブタイプの
+多い疾患でも、目的の候補が切り捨てられません。
+
 ### STEP 2 — 遺伝子を HGNC 照合
 
 「HGNCシンボルを確認」で各遺伝子の状態が表示されます。
@@ -383,10 +387,13 @@ PowerPoint と Word は `<style>` ブロックを無視するため、**計算�
 
 ## API
 
-### `GET /api/diseases?q=<疾患名>&limit=10`
+### `GET /api/diseases?q=<疾患名>&limit=50`
+
+`limit` は既定 50、最大 200。Open Targets へのページサイズとしても渡すので、
+大きくすれば実際に候補が増えます。`total` はヒット総数です。
 
 ```jsonc
-{ "query": "alzheimer disease",
+{ "query": "alzheimer disease", "total": 42,
   "results": [
     { "id": "EFO_0000249", "name": "Alzheimer disease",
       "description": "...", "exact": true }
@@ -510,7 +517,9 @@ PowerPoint と Word は `<style>` ブロックを無視するため、**計算�
 ステータスコード: `400`（入力不備・遺伝子数超過）、`404`（疾患が見つからない・
 関連遺伝子ゼロ）、`502`（Open Targets 側の障害）。
 
-### `GET /api/hpo/phenotypes?q=<症状名 または HP ID>&limit=15`
+### `GET /api/hpo/phenotypes?q=<症状名 または HP ID>&limit=50`
+
+`limit` は既定 50、最大 500。`total` は絞り込み前のヒット総数です。
 
 HPO の表現型 (HP 用語) を検索します。遺伝子が紐づく用語のみが対象です。
 
@@ -522,12 +531,12 @@ HPO の表現型 (HP 用語) を検索します。遺伝子が紐づく用語の
   ] }
 ```
 
-### `GET /api/hpo/diseases?q=<疾患名>&limit=10`
+### `GET /api/hpo/diseases?q=<疾患名>&limit=50`
 
-HPO 自身の疾患レジストリを検索します。
+HPO 自身の疾患レジストリを検索します。`limit` は既定 50、最大 500。
 
 ```jsonc
-{ "query": "alzheimer",
+{ "query": "alzheimer", "total": 33,
   "results": [
     { "id": "ORPHA:1020", "name": "Alzheimer disease", "source": "ORPHANET",
       "phenotype_count": 3, "exact": false }

@@ -38,7 +38,12 @@
   button.secondary{background:var(--panel);color:var(--text);border:1px solid var(--border);font-weight:500;padding:8px 14px}
   button.secondary:hover:not(:disabled){background:var(--soft)}
   /* disease candidates */
-  .cands{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .cands{margin-top:10px;border:1px solid var(--border);border-radius:8px;
+    max-height:330px;overflow-y:auto;overscroll-behavior:contain}
+  .cands::-webkit-scrollbar{width:10px}
+  .cands::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
+  .hitcount{font-size:12px;color:var(--muted);margin:8px 0 0}
+  .hitcount b{color:var(--text)}
   .cand{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--border);
     padding:9px 12px;font:inherit;color:inherit;cursor:pointer}
   .cand:last-child{border-bottom:0}
@@ -271,6 +276,15 @@ const STRONG = {{ strong_threshold }};
 const MODERATE = {{ moderate_threshold }};
 
 const $ = (id) => document.getElementById(id);
+const SEARCH_LIMIT = 200;   // asked of the server; the list scrolls
+
+function hitCount(total, shown, noun) {
+  if (!total) return "";
+  const more = total > shown;
+  return '<p class="hitcount"><b>' + total + "</b> 件ヒット"
+    + (more ? "（上位 " + shown + " 件を表示）" : "（全件表示）")
+    + '<span class="small"> — リストはスクロールできます</span></p>';
+}
 let picked = null;      // {id, name}
 let lastData = null;
 
@@ -308,7 +322,8 @@ async function searchDisease() {
   $("picked").innerHTML = "";
   picked = null;
   try {
-    const res = await fetch("/api/diseases?q=" + encodeURIComponent(q));
+    const res = await fetch("/api/diseases?q=" + encodeURIComponent(q)
+      + "&limit=" + SEARCH_LIMIT);
     const data = await res.json();
     if (!res.ok || data.error) { $("cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>"; return; }
     if (!data.results.length) { $("cands").innerHTML = '<p class="err small">該当する疾患が見つかりません: ' + esc(q) + "</p>"; return; }
@@ -322,6 +337,7 @@ async function searchDisease() {
         + "</button>";
     });
     html += "</div>";
+    html += hitCount(data.total || data.results.length, data.results.length, "疾患");
     $("cands").innerHTML = html;
     $("cands").querySelectorAll(".cand").forEach((btn) => {
       btn.addEventListener("click", () => selectDisease(data.results[+btn.dataset.i], btn));
@@ -345,7 +361,8 @@ async function searchHpTerm() {
   $("hp-search").disabled = true;
   $("hp-cands").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>HP用語を検索中…（初回はデータ取得に時間がかかります）</p>';
   try {
-    const res = await fetch("/api/hpo/phenotypes?q=" + encodeURIComponent(q));
+    const res = await fetch("/api/hpo/phenotypes?q=" + encodeURIComponent(q)
+      + "&limit=" + SEARCH_LIMIT);
     const data = await res.json();
     if (!res.ok || data.error) {
       $("hp-cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>";
@@ -365,6 +382,7 @@ async function searchHpTerm() {
         + '<span class="desc">関連遺伝子 ' + r.gene_count + " 件</span></button>";
     });
     html += "</div>";
+    html += hitCount(data.total || data.results.length, data.results.length, "症状");
     $("hp-cands").innerHTML = html;
     $("hp-cands").querySelectorAll(".cand").forEach((btn) => {
       btn.addEventListener("click", () => selectHpTerm(data.results[+btn.dataset.i], btn));
@@ -408,7 +426,8 @@ async function searchHpoDisease() {
   $("hpo-search").disabled = true;
   $("hpo-cands").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>HPO を検索中…（初回はデータ取得に時間がかかります）</p>';
   try {
-    const res = await fetch("/api/hpo/diseases?q=" + encodeURIComponent(q));
+    const res = await fetch("/api/hpo/diseases?q=" + encodeURIComponent(q)
+      + "&limit=" + SEARCH_LIMIT);
     const data = await res.json();
     if (!res.ok || data.error) {
       $("hpo-cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>";
@@ -427,6 +446,7 @@ async function searchHpoDisease() {
         + '<span class="desc">症状 ' + r.phenotype_count + " 件</span></button>";
     });
     html += "</div>";
+    html += hitCount(data.total || data.results.length, data.results.length, "疾患");
     $("hpo-cands").innerHTML = html;
     $("hpo-cands").querySelectorAll(".cand").forEach((btn) => {
       btn.addEventListener("click", () => selectHpoDisease(data.results[+btn.dataset.i], btn));

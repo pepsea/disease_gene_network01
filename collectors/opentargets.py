@@ -31,8 +31,9 @@ MAX_PAGE_SIZE = 500
 _ONTOLOGY_ID_RE = re.compile(r"^(EFO|MONDO|HP|DOID|Orphanet|NCIT|GO|MP|OTAR)_\d+$", re.I)
 
 SEARCH_QUERY = """
-query SearchEntity($q: String!, $entity: [String!]) {
-  search(queryString: $q, entityNames: $entity) {
+query SearchEntity($q: String!, $entity: [String!], $size: Int!) {
+  search(queryString: $q, entityNames: $entity, page: { index: 0, size: $size }) {
+    total
     hits {
       id
       name
@@ -44,23 +45,42 @@ query SearchEntity($q: String!, $entity: [String!]) {
 }
 """
 
-# Same query without `description`, used if that field is ever unavailable so
-# that disease search keeps working against a changed schema.
-SEARCH_QUERY_MINIMAL = """
-query SearchEntity($q: String!, $entity: [String!]) {
-  search(queryString: $q, entityNames: $entity) {
-    hits {
-      id
-      name
-      entity
-      score
-    }
+# Search variants, richest first. Neither `page` nor `description` can be
+# verified from this sandbox, so each is dropped in turn rather than failing
+# the search outright.
+SEARCH_QUERIES = [
+    SEARCH_QUERY,
+    # No `description`.
+    """
+query SearchEntity($q: String!, $entity: [String!], $size: Int!) {
+  search(queryString: $q, entityNames: $entity, page: { index: 0, size: $size }) {
+    total
+    hits { id name entity score }
   }
 }
-"""
+""",
+    # No paging: takes whatever page size Open Targets defaults to.
+    """
+query SearchEntity($q: String!, $entity: [String!], $size: Int!) {
+  search(queryString: $q, entityNames: $entity) {
+    hits { id name entity score description }
+  }
+}
+""",
+    """
+query SearchEntity($q: String!, $entity: [String!], $size: Int!) {
+  search(queryString: $q, entityNames: $entity) {
+    hits { id name entity score }
+  }
+}
+""",
+]
 
-# Set once the richer query is known to fail, so the fallback is not re-probed.
-_search_query_supported = True
+# Kept for callers that referenced it before the variant list existed.
+SEARCH_QUERY_MINIMAL = SEARCH_QUERIES[-1]
+
+# Set once a variant is known to work, so the rejected ones are not re-probed.
+_search_query_index: Optional[int] = None
 
 # Phenotype queries, richest first. `phenotypes` and the shape of its evidence
 # rows cannot be verified from this sandbox, so a rejected field falls back
@@ -166,30 +186,44 @@ def normalise_ontology_id(value: str) -> str:
     return (value or "").strip().upper().replace("ORPHANET", "Orphanet")
 
 
-def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
+def search_diseases(query: str, limit: int = 50) -> list[dict[str, Any]]:
     """Return candidate diseases for a free-text query, best match first.
 
     Each candidate is ``{"id", "name", "description", "exact"}``, where
     ``exact`` marks a case-insensitive full-name match. Exact matches are
     promoted above the search engine's own ranking, so that "Alzheimer disease"
     does not lose to "Alzheimer disease 2".
+
+    ``limit`` is asked of Open Targets as a page size as well as applied
+    locally, so a larger limit really does return more candidates.
     """
-    global _search_query_supported
+    global _search_query_index
 
     query = (query or "").strip()
     if not query:
         return []
 
-    if _search_query_supported:
+    size = max(1, min(int(limit), 500))
+    variables = {"q": query, "entity": ["disease"], "size": size}
+    order = (
+        [_search_query_index]
+        if _search_query_index is not None
+        else range(len(SEARCH_QUERIES))
+    )
+
+    data = None
+    last_error: Optional[OpenTargetsError] = None
+    for index in order:
         try:
-            data = _post(SEARCH_QUERY, {"q": query, "entity": ["disease"]})
-        except OpenTargetsError:
-            # Retry once without `description`; if that works, stop trying the
-            # richer query for the rest of the process.
-            data = _post(SEARCH_QUERY_MINIMAL, {"q": query, "entity": ["disease"]})
-            _search_query_supported = False
-    else:
-        data = _post(SEARCH_QUERY_MINIMAL, {"q": query, "entity": ["disease"]})
+            data = _post(SEARCH_QUERIES[index], variables)
+        except OpenTargetsError as exc:
+            last_error = exc
+            continue
+        _search_query_index = index
+        break
+
+    if data is None:
+        raise last_error or OpenTargetsError("Open Targets search failed")
 
     wanted = query.casefold()
     candidates: list[dict[str, Any]] = []
@@ -207,7 +241,7 @@ def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
         )
 
     candidates.sort(key=lambda c: not c["exact"])  # stable: exact matches first
-    return candidates[: max(1, int(limit))]
+    return candidates[:size]
 
 
 def resolve_disease_id(disease_name: str) -> tuple[Optional[str], str]:

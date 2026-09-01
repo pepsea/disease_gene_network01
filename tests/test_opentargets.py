@@ -202,14 +202,51 @@ def test_search_falls_back_when_description_is_unsupported(monkeypatch):
             [{"id": "EFO_1", "name": "Alzheimer disease", "entity": "disease"}]))
 
     monkeypatch.setattr(ot, "SESSION", FakeSession(post=handler))
-    monkeypatch.setattr(ot, "_search_query_supported", True)
+    monkeypatch.setattr(ot, "_search_query_index", None)
 
     assert [r["id"] for r in ot.search_diseases("alzheimer")] == ["EFO_1"]
-    assert len(calls) == 2  # rich query, then the minimal one
+    assert len(calls) == 2  # rich query, then the one without description
 
-    # The richer query is not retried afterwards.
+    # The rejected variant is not retried afterwards.
     ot.search_diseases("alzheimer")
     assert len(calls) == 3
+
+
+def test_search_falls_back_when_paging_is_unsupported(monkeypatch):
+    """A schema without `page` on search must not break it either."""
+    calls = []
+
+    def handler(url, **kwargs):
+        query = kwargs["json"]["query"]
+        calls.append(query)
+        if "page:" in query.replace(" ", "") or "page: {" in query:
+            return FakeResponse({"errors": [{"message": "Unknown argument page"}]})
+        return FakeResponse(search_payload(
+            [{"id": "EFO_1", "name": "Alzheimer disease", "entity": "disease"}]))
+
+    monkeypatch.setattr(ot, "SESSION", FakeSession(post=handler))
+    monkeypatch.setattr(ot, "_search_query_index", None)
+    assert [r["id"] for r in ot.search_diseases("alzheimer")] == ["EFO_1"]
+    # Both paged variants rejected, then the unpaged one works.
+    assert len(calls) == 3
+
+
+def test_search_raises_when_every_variant_fails(monkeypatch):
+    monkeypatch.setattr(ot, "SESSION", FakeSession(
+        post=FakeResponse({"errors": [{"message": "boom"}]})))
+    monkeypatch.setattr(ot, "_search_query_index", None)
+    with pytest.raises(ot.OpenTargetsError):
+        ot.search_diseases("alzheimer")
+
+
+def test_the_requested_size_is_sent_as_the_page_size(monkeypatch):
+    session = FakeSession(post=FakeResponse(search_payload([])))
+    monkeypatch.setattr(ot, "SESSION", session)
+    monkeypatch.setattr(ot, "_search_query_index", None)
+    ot.search_diseases("alzheimer", limit=120)
+    assert session.post_calls[0]["json"]["variables"]["size"] == 120
+    ot.search_diseases("alzheimer", limit=9999)
+    assert session.post_calls[1]["json"]["variables"]["size"] == 500
 
 
 def test_ontology_id_helpers():

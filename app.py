@@ -206,9 +206,9 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         if not query:
             return jsonify({"error": "q is required"}), 400
         try:
-            limit = min(int(request.args.get("limit", 10)), 25)
+            limit = min(int(request.args.get("limit", 50)), 200)
         except (TypeError, ValueError):
-            limit = 10
+            limit = 50
 
         try:
             if is_ontology_id(query):
@@ -219,6 +219,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 return jsonify(
                     {
                         "query": query,
+                        "total": 1,
                         "results": [
                             {
                                 "id": ontology_id,
@@ -229,7 +230,8 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                         ],
                     }
                 )
-            return jsonify({"query": query, "results": search_diseases(query, limit=limit)})
+            results = search_diseases(query, limit=limit)
+            return jsonify({"query": query, "total": len(results), "results": results})
         except OpenTargetsError as exc:
             return jsonify({"error": str(exc)}), 502
 
@@ -240,10 +242,12 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         if not query:
             return jsonify({"error": "q is required"}), 400
         try:
-            limit = min(int(request.args.get("limit", 10)), 25)
+            limit = min(int(request.args.get("limit", 50)), 500)
         except (TypeError, ValueError):
-            limit = 10
-        return jsonify({"query": query, "results": hpo.search_diseases(query, limit=limit)})
+            limit = 50
+        results = hpo.search_diseases(query, limit=limit)
+        total = results[0].get("match_total", len(results)) if results else 0
+        return jsonify({"query": query, "total": total, "results": results})
 
     @app.route("/api/hpo/phenotypes")
     def hpo_phenotypes():
@@ -252,10 +256,12 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         if not query:
             return jsonify({"error": "q is required"}), 400
         try:
-            limit = min(int(request.args.get("limit", 15)), 50)
+            limit = min(int(request.args.get("limit", 50)), 500)
         except (TypeError, ValueError):
-            limit = 15
-        return jsonify({"query": query, "results": hpo.search_phenotypes(query, limit=limit)})
+            limit = 50
+        results = hpo.search_phenotypes(query, limit=limit)
+        total = results[0].get("match_total", len(results)) if results else 0
+        return jsonify({"query": query, "total": total, "results": results})
 
     @app.route("/api/genes/validate", methods=["POST"])
     def validate_genes():

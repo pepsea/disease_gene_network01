@@ -366,7 +366,7 @@ def list_diseases() -> list[dict[str, Any]]:
     return diseases
 
 
-def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
+def search_diseases(query: str, limit: int = 50) -> list[dict[str, Any]]:
     """Search HPO's disease registry by name.
 
     Exact matches rank first, then names starting with the query, then names
@@ -393,10 +393,11 @@ def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
         scored.append((tier, -disease["phenotype_count"], disease["name"], disease))
 
     scored.sort(key=lambda row: row[:3])
-    return [
-        {**disease, "exact": tier == 0}
+    results = [
+        {**disease, "exact": tier == 0, "match_total": len(scored)}
         for tier, _, _, disease in scored[: max(1, int(limit))]
     ]
+    return results
 
 
 _HP_ID = re.compile(r"^HP[:_]?(\d{7})$", re.I)
@@ -425,7 +426,7 @@ def list_phenotypes() -> list[dict[str, Any]]:
     ]
 
 
-def search_phenotypes(query: str, limit: int = 15) -> list[dict[str, Any]]:
+def search_phenotypes(query: str, limit: int = 50) -> list[dict[str, Any]]:
     """Search HP terms by name, or look one up by its id.
 
     ``HP:0002354`` (or ``HP_0002354``) returns that term directly; anything else
@@ -459,7 +460,7 @@ def search_phenotypes(query: str, limit: int = 15) -> list[dict[str, Any]]:
 
     scored.sort(key=lambda row: row[:3])
     return [
-        {**phenotype, "exact": tier == 0}
+        {**phenotype, "exact": tier == 0, "match_total": len(scored)}
         for tier, _, _, phenotype in scored[: max(1, int(limit))]
     ]
 

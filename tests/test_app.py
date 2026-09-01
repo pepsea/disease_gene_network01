@@ -39,11 +39,14 @@ GENE_PATHWAYS = {
 
 PHENOTYPES = [
     {"hpo_id": "HP:0002354", "ontology_id": "HP_0002354", "name": "Memory impairment",
-     "frequency": "HP:0040281", "aspect": "P", "resource": "HPO", "excluded": False},
+     "frequency": "HP:0040281", "aspect": "P", "resources": ["ORPHANET", "OMIM"],
+     "resource": "ORPHANET", "excluded": False},
     {"hpo_id": "HP:0000726", "ontology_id": "HP_0000726", "name": "Dementia",
-     "frequency": "HP:0040282", "aspect": "P", "resource": "HPO", "excluded": False},
+     "frequency": "HP:0040282", "aspect": "P", "resources": ["HPO"],
+     "resource": "HPO", "excluded": False},
     {"hpo_id": "HP:0009999", "ontology_id": "HP_0009999", "name": "Absent finding",
-     "frequency": "", "aspect": "P", "resource": "HPO", "excluded": True},
+     "frequency": "", "aspect": "P", "resources": ["ORPHANET"],
+     "resource": "ORPHANET", "excluded": True},
 ]
 SYMPTOM_GENES = [
     {"symbol": "APP", "score": 1.4, "max_score": 0.8, "phenotype_count": 2,
@@ -55,14 +58,26 @@ SYMPTOM_GENES = [
 ]
 
 
+# Per-symptom gene lists: APP drives both, PSEN1 only Dementia, MAPT only Memory.
+PER_PHENOTYPE = {
+    "HP:0002354": [{"symbol": "APP", "score": 0.8}, {"symbol": "MAPT", "score": 0.5}],
+    "HP:0000726": [{"symbol": "APP", "score": 0.6}, {"symbol": "PSEN1", "score": 0.7}],
+}
+
+
 def fake_symptom_set(phenotypes, **kwargs):
+    present = [p for p in phenotypes if not p.get("excluded")]
+    expanded = [{"hpo_id": p["hpo_id"], "name": p["name"], "frequency": p["frequency"],
+                 "resources": p.get("resources") or [], "ontology_id": p["ontology_id"],
+                 "gene_count": len(PER_PHENOTYPE.get(p["hpo_id"], []))}
+                for p in present if PER_PHENOTYPE.get(p["hpo_id"])]
     return {
         "genes": [dict(g) for g in SYMPTOM_GENES],
-        "expanded": [{"hpo_id": p["hpo_id"], "name": p["name"],
-                      "frequency": p["frequency"], "gene_count": 2}
-                     for p in phenotypes if not p.get("excluded")],
+        "per_phenotype": [{**e, "genes": [dict(g) for g in PER_PHENOTYPE[e["hpo_id"]]]}
+                          for e in expanded],
+        "expanded": expanded,
         "empty": [], "failed": [],
-        "phenotype_count": sum(1 for p in phenotypes if not p.get("excluded")),
+        "phenotype_count": len(present),
     }
 
 
@@ -627,6 +642,66 @@ def test_symptom_limits_reach_the_builder(monkeypatch, patched):
     c.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]})
     assert seen["max_phenotypes"] == 7
     assert seen["genes_per_phenotype"] == 11
+
+
+# --- symptom matrix --------------------------------------------------------
+
+def test_each_gene_is_scored_per_symptom(client):
+    body = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()
+    cols = body["symptoms"]["matrix_symptoms"]
+    assert [c["name"] for c in cols] == ["Memory impairment", "Dementia"]
+
+    cells = body["results"][0]["symptom_cells"]
+    assert [c["hpo_id"] for c in cells] == ["HP:0002354", "HP:0000726"]
+    # APP is in both symptom lists, and its partners cover the rest of each.
+    assert cells[0]["percent"] == 100.0
+    assert cells[1]["percent"] == 100.0
+    assert all(c["target_self"] for c in cells)
+
+
+def test_the_overall_score_is_the_mean_across_symptoms(monkeypatch, client):
+    # XYZ has no partners, so it covers nothing in either symptom.
+    monkeypatch.setattr(app_module, "collect_ppi_partners",
+                        lambda gene, **kw: {"partners": ["MAPT"], "excluded_hubs": [],
+                                            "source_counts": {}, "graph_size": 2})
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["XYZ"]}).get_json()["results"][0]
+    cells = {c["hpo_id"]: c["percent"] for c in r["symptom_cells"]}
+    # Memory impairment: MAPT is 0.5 of 1.3; Dementia: MAPT absent.
+    assert cells["HP:0002354"] == 38.5
+    assert cells["HP:0000726"] == 0.0
+    assert r["symptom_mean_percent"] == round((38.5 + 0.0) / 2, 1)
+
+
+def test_matrix_cells_report_counts_per_symptom(client):
+    cells = client.post("/api/analyze",
+                        json={"disease": "AD", "genes": ["APP"]}).get_json()["results"][0]["symptom_cells"]
+    assert cells[0]["matched_count"] == 2 and cells[0]["gene_count"] == 2
+    assert cells[1]["matched_count"] == 2 and cells[1]["gene_count"] == 2
+
+
+def test_mean_is_zero_when_nothing_overlaps(monkeypatch, client):
+    monkeypatch.setattr(app_module, "collect_ppi_partners",
+                        lambda gene, **kw: {"partners": [], "excluded_hubs": [],
+                                            "source_counts": {}, "graph_size": 1})
+    r = client.post("/api/analyze", json={"disease": "AD", "genes": ["KRAS"]}).get_json()["results"][0]
+    assert r["symptom_mean_percent"] == 0.0
+    assert all(c["percent"] == 0.0 for c in r["symptom_cells"])
+
+
+def test_annotation_sources_are_reported_per_symptom(client):
+    """Orphanet-derived symptoms must be identifiable."""
+    sym = client.post("/api/analyze", json={"disease": "AD", "genes": ["APP"]}).get_json()["symptoms"]
+    by_name = {p["name"]: p for p in sym["phenotypes"]}
+    assert by_name["Memory impairment"]["resources"] == ["ORPHANET", "OMIM"]
+    assert by_name["Dementia"]["resources"] == ["HPO"]
+    assert sym["matrix_symptoms"][0]["resources"] == ["ORPHANET", "OMIM"]
+
+
+def test_matrix_is_absent_when_symptoms_are_off(client):
+    r = client.post("/api/analyze",
+                    json={"disease": "AD", "genes": ["APP"], "symptoms": False}).get_json()["results"][0]
+    assert "symptom_cells" not in r
+    assert "symptom_mean_percent" not in r
 
 
 # --- pages -----------------------------------------------------------------

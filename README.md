@@ -10,7 +10,7 @@
 4. **解析** — 3つの表で重複を評価
    - **表1 遺伝子重複** — PPIパートナーと疾患遺伝子の重複
    - **表2 パスウェイ重複** — 疾患のエンリッチメント解析結果との重複
-   - **表3 症状由来遺伝子重複** — 疾患の症状(HPO)から集めた遺伝子群との重複
+   - **表3 症状別マトリックス** — 症状ごとにスコア化し、平均でランキング
 
 PPI の収集・統合・ランキングは
 [aiagent_hypothesis_generator002](https://github.com/pepsea/aiagent_hypothesis_generator002)
@@ -153,10 +153,37 @@ HPO の各表現型は Open Targets の疾患インデックスに `HP_0002354` 
 いるため、疾患遺伝子と**同じ associations クエリ**でそのまま遺伝子を引けます。
 追加のAPIキーやID変換は不要です。
 
+### 症状の出典（Orphanet を含む）
+
+Open Targets の症状注釈は HPO が **OMIM・Orphanet・DECIPHER** を統合したもので、
+`evidence[].resource` に出典が入ります。**Orphanet 由来の症状も含まれます**。
+複数の情報源が同じ症状を注釈することがあるため、出典はすべて保持し
+（`resources`）、マトリックスの列見出しと症状リストの下に表示します。
+
+頻度注釈（必発／高頻度／頻発／時折／稀）の多くは Orphanet 由来です。
+
+結果は**遺伝子 × 症状の数値マトリックス**で表示します。
+
+| | Memory impairment | Dementia | Parkinsonism | … | 総合(平均) |
+|---|---|---|---|---|---|
+| APP | 100.0 ★ | 88.8 ★ | 41.7 | … | **73.0%** |
+| MAPT | 73.7 ★ | 33.5 | 41.7 ★ | … | **49.8%** |
+| SNCA | 0.0 | 0.0 | 58.3 ★ | … | **11.7%** |
+
+各セルは、その遺伝子のPPIネットワークが**その症状に関連する遺伝子群**を何％
+カバーしているか（加重重複率）です。**総合は全症状の平均値**で、この順に
+ランキングします。★ はターゲット遺伝子自身がその症状の関連遺伝子である印です。
+
+症状ごとに分けることで、単一のスコアでは埋もれる**症状特異性**が見えます。
+上の例では SNCA は総合 11.7% と低いものの Parkinsonism だけ 58.3% で、
+特定の症状に限って強く効く遺伝子だと分かります。
+
 | 指標 | 定義 |
 |---|---|
-| 加重重複率 | 重複した症状由来遺伝子のスコア合計 ÷ 症状由来遺伝子全体のスコア合計 |
-| 単純重複率 | 重複した症状由来遺伝子数 ÷ 症状由来遺伝子数 |
+| セル（症状ごと） | その症状の関連遺伝子群に対する加重重複率 |
+| 総合 | 全症状のセル値の平均（ランキングに使用） |
+| 加重重複率（統合） | 全症状の遺伝子を統合した集合に対する重複率（API・CSVのみ） |
+| 単純重複率（統合） | 統合集合に対する遺伝子数ベースの重複率（API・CSVのみ） |
 
 遺伝子のスコアは、**その遺伝子が関与する各症状での関連スコアの合計**です。
 強さと広さの両方を反映するので、5つの症状に関わる遺伝子は同じ強さで1症状のみの
@@ -181,7 +208,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
 |---|---|
 | 表1 | ターゲットが疾患遺伝子リストに含まれる場合、そのOTスコアを分子に加算し `matched_count` にも計上 |
 | 表2 | ターゲットが疾患パスウェイの構成遺伝子である場合、そのパスウェイを重複として計上 |
-| 表3 | ターゲットが症状由来遺伝子である場合、そのスコアを分子に加算し `symptom_matched_count` にも計上 |
+| 表3 | 症状ごとのセルでも統合スコアでも、ターゲットが関連遺伝子である場合はそれを含めて計上（マトリックスでは ★ 表示） |
 
 いずれも**二重計上はしません**。表1ではターゲット自身を重複遺伝子リストから除外し、
 表2ではネットワーク経由と自身の所属が同じパスウェイを指す場合も1件として数えます
@@ -279,7 +306,11 @@ common disease では疎です。注釈がない疾患では表3は表示され�
     "enabled": true, "phenotype_count": 5, "expanded_count": 3,
     "gene_count": 6, "excluded_count": 1, "unindexed_count": 1,
     "phenotypes": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
-                      "frequency": "HP:0040281", "excluded": false } ],
+                      "frequency": "HP:0040281",
+                      "resources": ["ORPHANET", "OMIM"], "excluded": false } ],
+    "matrix_symptoms": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
+                           "frequency": "HP:0040281",
+                           "resources": ["ORPHANET", "OMIM"], "gene_count": 3 } ],
     "expanded":   [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
                       "frequency": "HP:0040281", "gene_count": 3 } ],
     "top_genes":  [ { "symbol": "APP", "score": 1.37, "phenotype_count": 2,
@@ -317,7 +348,12 @@ common disease では疎です。注釈がない疾患では表3は表示され�
       "symptom_gene_count": 6,
       "symptom_target_self": "APP", "symptom_target_self_score": 1.37,
       "symptom_interpretation": "strong",
-      "symptom_overlapping_genes": [ { "symbol": "MAPT", "score": 1.1 } ]
+      "symptom_overlapping_genes": [ { "symbol": "MAPT", "score": 1.1 } ],
+      "symptom_mean_percent": 73.0,            // 総合（ランキングに使用）
+      "symptom_cells": [                        // 症状ごとのスコア
+        { "hpo_id": "HP:0002354", "name": "Memory impairment", "percent": 100.0,
+          "matched_count": 3, "gene_count": 3, "target_self": true }
+      ]
     }
   ]
 }

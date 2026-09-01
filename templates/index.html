@@ -95,6 +95,24 @@
   .term{display:inline-block;margin-right:8px}
   .srcbadge{font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
     background:var(--soft);border:1px solid var(--border);margin-right:3px;vertical-align:1px}
+  .matrix{border-collapse:separate;border-spacing:0;font-size:13px}
+  .matrix th,.matrix td{padding:6px 8px;border-bottom:1px solid var(--border)}
+  .matrix thead th{background:var(--soft);text-transform:none;letter-spacing:0;
+    font-size:11px;vertical-align:bottom;line-height:1.25;min-width:74px;max-width:104px;
+    white-space:normal;word-break:break-word}
+  .matrix th.rank{min-width:34px;text-align:right;color:var(--muted)}
+  .matrix th.gene,.matrix td.gene{position:sticky;left:0;background:var(--panel);
+    z-index:1;min-width:104px;border-right:1px solid var(--border)}
+  .matrix thead th.gene{background:var(--soft)}
+  .matrix td.cell{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .matrix td.mean{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;
+    border-left:1px solid var(--border);background:var(--soft)}
+  .matrix thead th.mean{border-left:1px solid var(--border)}
+  .matrix tbody tr:hover td{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .matrix tbody tr:hover td.gene{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+  .selfdot{color:var(--moderate);font-size:10px;vertical-align:2px}
+  .freq{display:block;font-weight:400;color:var(--muted);font-size:10px;margin-top:2px}
+  .srcs-line{font-size:11px;color:var(--muted);margin:0 0 10px}
   .viatag{font-size:10px;font-weight:700;color:var(--moderate);
     border:1px solid color-mix(in srgb,var(--moderate) 45%,transparent);
     padding:0 4px;border-radius:3px;vertical-align:1px}
@@ -476,6 +494,13 @@ function renderSymptoms(data) {
           + "</span>").join("")
       + (s.phenotypes.length > 12 ? " …他" + (s.phenotype_count - 12) + "件" : "")
       + "</p>";
+    const srcs = {};
+    for (const t of s.phenotypes) for (const r of (t.resources || [])) srcs[r] = (srcs[r] || 0) + 1;
+    const srcList = Object.entries(srcs).sort((a, b) => b[1] - a[1]);
+    if (srcList.length) {
+      html += '<p class="srcs-line">注釈の出典: '
+        + srcList.map(([k, v]) => esc(k) + " " + v + "件").join(" / ") + "</p>";
+    }
   }
   if ((s.top_genes || []).length) {
     html += '<p class="terms" style="margin-bottom:12px">症状由来遺伝子 上位: '
@@ -486,48 +511,73 @@ function renderSymptoms(data) {
       + "</p>";
   }
 
-  const LABEL = { strong: "強い関連", moderate: "中程度", weak: "関連が薄い" };
-  html += '<div class="table-scroll"><table><thead><tr>'
-        + "<th>遺伝子</th><th>加重重複率<br><span class=\"small\">症状スコア加重</span></th>"
-        + "<th>単純重複率<br><span class=\"small\">遺伝子数ベース</span></th>"
-        + "<th>ターゲット自身</th><th>重複した症状由来遺伝子（上位5件）</th>"
-        + "</tr></thead><tbody>";
+  const cols = s.matrix_symptoms || [];
+  if (!cols.length) {
+    html += '<p class="tablesub err">遺伝子に展開できた症状がありません。</p></div>';
+    return html;
+  }
 
-  for (const r of data.results) {
-    const nameCell = "<b>" + esc(r.gene) + "</b>"
-      + (r.input_gene && r.input_gene.toUpperCase() !== r.gene.toUpperCase()
-          ? '<div class="small">入力: ' + esc(r.input_gene) + "</div>" : "");
+  // Rank by the mean across symptoms.
+  const rows = data.results
+    .filter((r) => !r.error && r.symptom_mean_percent != null)
+    .slice()
+    .sort((a, b) => b.symptom_mean_percent - a.symptom_mean_percent);
+  const skipped = data.results.filter((r) => r.error || r.symptom_mean_percent == null);
 
-    if (r.error || r.symptom_weighted_percent == null) {
-      html += "<tr><td>" + nameCell + '</td><td colspan="4" class="small">'
-        + (r.error ? '<span class="err">' + esc(r.error) + "</span>" : "—") + "</td></tr>";
-      continue;
-    }
-    const cls = r.symptom_interpretation || "weak";
+  const cellStyle = (v) => {
+    if (v <= 0) return "";
+    const a = Math.min(0.85, 0.10 + (v / 100) * 0.75);
+    return ' style="background:color-mix(in srgb,var(--accent) ' + Math.round(a * 100)
+         + '%,transparent);color:' + (a > 0.5 ? "#fff" : "inherit") + '"';
+  };
+
+  html += '<div class="table-scroll"><table class="matrix"><thead><tr>'
+        + '<th class="rank">#</th><th class="gene">遺伝子</th>';
+  for (const c of cols) {
+    html += "<th>" + esc(c.name)
+          + (c.frequency && FREQ_LABEL[c.frequency]
+              ? '<span class="freq">' + FREQ_LABEL[c.frequency] + "</span>" : "")
+          + (c.resources && c.resources.length
+              ? '<span class="freq">' + esc(c.resources.join("/")) + "</span>" : "")
+          + "</th>";
+  }
+  html += '<th class="mean">総合<br><span class="small">平均</span></th></tr></thead><tbody>';
+
+  rows.forEach((r, i) => {
+    const cells = {};
+    for (const c of r.symptom_cells || []) cells[c.hpo_id] = c;
     html += "<tr>"
-      + "<td>" + nameCell + "</td>"
-      + '<td class="num"><span class="pct ' + cls + '">' + r.symptom_weighted_percent.toFixed(1) + "%</span>"
-      + '<div class="bar" style="color:var(--' + cls + ')"><span style="width:'
-      + Math.min(100, r.symptom_weighted_percent) + '%"></span></div>'
-      + '<div class="small">' + LABEL[cls] + "</div></td>"
-      + '<td class="num"><span class="pct">' + r.symptom_overlap_percent.toFixed(1) + "%</span>"
-      + '<div class="small">' + r.symptom_matched_count + " / " + r.symptom_gene_count + " 遺伝子</div>"
-      + '<div class="small">PPI経由 ' + r.symptom_overlap_count + "</div></td>"
-      + '<td class="num">' + (r.symptom_target_self
-          ? "★ " + esc(r.symptom_target_self) + " (" + Number(r.symptom_target_self_score).toFixed(2) + ")"
-          : "—") + "</td>"
-      + '<td class="small">' + ((r.symptom_overlapping_genes || []).slice(0, 5).map((g) =>
-            esc(g.symbol) + "(" + Number(g.score).toFixed(2) + ")").join(", ") || "—")
-      + ((r.symptom_overlapping_genes || []).length > 5
-          ? " …他" + (r.symptom_overlapping_genes.length - 5) + "件" : "")
-      + "</td></tr>";
+      + '<td class="rank" style="text-align:right;color:var(--muted)">' + (i + 1) + "</td>"
+      + '<td class="gene"><b>' + esc(r.gene) + "</b>"
+      + (r.input_gene && r.input_gene.toUpperCase() !== r.gene.toUpperCase()
+          ? '<div class="small">入力: ' + esc(r.input_gene) + "</div>" : "")
+      + "</td>";
+    for (const c of cols) {
+      const cell = cells[c.hpo_id];
+      const v = cell ? cell.percent : 0;
+      html += '<td class="cell"' + cellStyle(v) + ' title="'
+        + esc(c.name) + ": " + (cell ? cell.matched_count + "/" + cell.gene_count + " 遺伝子" : "—")
+        + '">' + v.toFixed(1)
+        + (cell && cell.target_self ? '<span class="selfdot"> ★</span>' : "") + "</td>";
+    }
+    const m = r.symptom_mean_percent;
+    const cls = m >= STRONG * 100 ? "strong" : m >= MODERATE * 100 ? "moderate" : "weak";
+    html += '<td class="mean"><span class="pct ' + cls + '">' + m.toFixed(1) + "%</span></td></tr>";
+  });
+
+  for (const r of skipped) {
+    html += '<tr><td class="rank">—</td><td class="gene"><b>' + esc(r.gene) + "</b></td>"
+      + '<td colspan="' + (cols.length + 1) + '" class="small">'
+      + (r.error ? '<span class="err">' + esc(r.error) + "</span>" : "—") + "</td></tr>";
   }
   html += "</tbody></table></div>";
-  html += '<p class="legend"><b>症状由来遺伝子</b> = 疾患の各症状(HPO)に関連する遺伝子を Open Targets から集めて統合したもの。'
-        + "遺伝子のスコアは、その遺伝子が関与する各症状での関連スコアの<b>合計</b>です"
-        + "（強さと広さの両方を反映。5症状に関わる遺伝子は1症状のみの遺伝子より重くなります）。<br>"
-        + "「この疾患に伴わない」と注釈された症状は遺伝子展開の対象外です。"
-        + "表1と同様、ターゲット遺伝子自身が症状由来遺伝子である場合はそれを含めて数えます。</p>";
+  html += '<p class="legend">各セルは、その遺伝子のPPIネットワークが<b>その症状に関連する遺伝子群</b>を'
+        + "何％カバーしているか（加重重複率）。<b>総合</b>は全症状の平均値で、この順に並べています。<br>"
+        + "★ はターゲット遺伝子自身がその症状の関連遺伝子であることを示します"
+        + "（表1と同様、自身も含めて数えます）。列見出しの2行目は頻度と注釈の出典"
+        + "（ORPHANET / OMIM / DECIPHER など）です。<br>"
+        + "症状由来遺伝子のスコアは、その遺伝子が関与する各症状での関連スコアの合計です。"
+        + "「この疾患に伴わない」と注釈された症状は対象外です。</p>";
   html += "</div>";
   return html;
 }
@@ -628,7 +678,11 @@ function toCsv(d) {
       (r.overlapping_pathways || []).map((t) => t.name + "[" + t.via + "]").join(" | "),
       r.symptom_weighted_percent ?? "", r.symptom_overlap_percent ?? "",
       r.symptom_matched_count ?? "", r.symptom_overlap_count ?? "",
-      r.symptom_gene_count ?? "",
+      r.symptom_gene_count ?? "", r.symptom_mean_percent ?? "",
+      ...symCols.map((c) => {
+        const hit = (r.symptom_cells || []).find((x) => x.hpo_id === c.hpo_id);
+        return hit ? hit.percent : "";
+      }),
       (r.symptom_overlapping_genes || []).map((g) => g.symbol + "(" + g.score + ")").join(" "),
       r.error ?? ""]);
   }

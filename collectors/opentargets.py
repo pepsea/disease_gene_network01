@@ -293,7 +293,9 @@ def get_disease_phenotypes(disease_id: str, limit: int = 50) -> list[dict[str, A
     """Return the disease's HPO phenotypes (its symptoms), most relevant first.
 
     Each entry is ``{"hpo_id", "ontology_id", "name", "description", "frequency",
-    "aspect", "resource", "excluded"}``. Phenotypes every source marks as
+    "aspect", "resources", "resource", "excluded"}``. ``resources`` lists every
+    source annotating the phenotype — Open Targets carries HPO's merge of OMIM,
+    Orphanet and DECIPHER, so a symptom can be supported by several. Phenotypes every source marks as
     *absent* in this disease (``qualifierNot``) are flagged ``excluded`` — they
     describe what the disease does not cause, so callers should not use them to
     seed genes.
@@ -339,7 +341,17 @@ def get_disease_phenotypes(disease_id: str, limit: int = 50) -> list[dict[str, A
         excluded = bool(evidence) and all(e.get("qualifierNot") for e in evidence)
         frequency = next((e.get("frequency") for e in evidence if e.get("frequency")), "")
         aspect = next((e.get("aspect") for e in evidence if e.get("aspect")), "")
-        resource = next((e.get("resource") for e in evidence if e.get("resource")), "")
+        # A phenotype is often annotated by several sources (Open Targets
+        # carries HPO's merge of OMIM, Orphanet and DECIPHER), so keep them all
+        # rather than the first — Orphanet in particular is where most of the
+        # frequency annotation comes from.
+        resources = list(
+            dict.fromkeys(
+                str(e.get("resource")).strip()
+                for e in evidence
+                if e.get("resource")
+            )
+        )
 
         phenotypes.append(
             {
@@ -349,7 +361,9 @@ def get_disease_phenotypes(disease_id: str, limit: int = 50) -> list[dict[str, A
                 "description": (hpo.get("description") or "")[:300],
                 "frequency": frequency or "",
                 "aspect": aspect or "",
-                "resource": resource or "",
+                "resources": resources,
+                # First source, kept for callers that want a single label.
+                "resource": resources[0] if resources else "",
                 "excluded": excluded,
             }
         )

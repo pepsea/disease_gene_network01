@@ -321,6 +321,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                     max_workers=app.config["MAX_WORKERS"],
                 )
         symptom_genes = symptom_set["genes"]
+        symptom_per_phenotype = symptom_set.get("per_phenotype") or []
 
         # ── Genes: map to approved HGNC symbols before analysing.
         if app.config["VALIDATE_SYMBOLS"]:
@@ -349,6 +350,28 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             if symptom_genes:
                 symptom_overlap = _prefix_symptom(
                     calc_network_overlap(symbol, ppi["partners"], symptom_genes)
+                )
+                # Score each symptom on its own, so the gene x symptom matrix
+                # shows where the overlap actually sits. The overall figure is
+                # the mean across symptoms.
+                cells = []
+                for phenotype in symptom_per_phenotype:
+                    cell = calc_network_overlap(symbol, ppi["partners"], phenotype["genes"])
+                    cells.append(
+                        {
+                            "hpo_id": phenotype.get("hpo_id", ""),
+                            "name": phenotype.get("name", ""),
+                            "percent": cell["weighted_percent"],
+                            "matched_count": cell["matched_count"],
+                            "gene_count": cell["disease_gene_count"],
+                            "target_self": bool(cell["target_self"]),
+                        }
+                    )
+                symptom_overlap["symptom_cells"] = cells
+                symptom_overlap["symptom_mean_percent"] = (
+                    round(sum(c["percent"] for c in cells) / len(cells), 1)
+                    if cells
+                    else 0.0
                 )
 
             enrichment: dict[str, Any] = {}
@@ -419,10 +442,18 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                     "phenotypes": [
                         {"hpo_id": p["hpo_id"], "name": p["name"],
                          "frequency": p.get("frequency", ""),
+                         "resources": p.get("resources") or [],
                          "excluded": p.get("excluded", False)}
                         for p in phenotypes[:30]
                     ],
                     "expanded": symptom_set["expanded"][:30],
+                    "matrix_symptoms": [
+                        {"hpo_id": e.get("hpo_id", ""), "name": e.get("name", ""),
+                         "frequency": e.get("frequency", ""),
+                         "resources": e.get("resources") or [],
+                         "gene_count": e.get("gene_count", 0)}
+                        for e in symptom_per_phenotype
+                    ],
                     "top_genes": [
                         {"symbol": g["symbol"], "score": g["score"],
                          "phenotype_count": g["phenotype_count"],

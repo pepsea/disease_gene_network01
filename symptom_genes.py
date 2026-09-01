@@ -46,10 +46,13 @@ def build_symptom_gene_set(
             first, and each one costs an API call).
 
     Returns:
-        ``{"genes", "expanded", "empty", "failed", "phenotype_count"}`` where
-        ``genes`` is ``[{"symbol", "score", "max_score", "phenotype_count",
-        "phenotypes"}]`` sorted by descending score — the shape
-        :func:`nw_overlap.calc_network_overlap` consumes.
+        ``{"genes", "per_phenotype", "expanded", "empty", "failed",
+        "phenotype_count"}``. ``genes`` is the pooled set,
+        ``[{"symbol", "score", "max_score", "phenotype_count", "phenotypes"}]``
+        sorted by descending score — the shape
+        :func:`nw_overlap.calc_network_overlap` consumes. ``per_phenotype``
+        keeps each symptom's own gene list, so a gene can also be scored
+        symptom by symptom.
     """
     # Phenotypes marked as absent in this disease describe what it does not
     # cause, so they must not seed genes.
@@ -57,8 +60,8 @@ def build_symptom_gene_set(
     usable = [p for p in usable if p.get("ontology_id")][: max(1, int(max_phenotypes))]
 
     if not usable:
-        return {"genes": [], "expanded": [], "empty": [], "failed": [],
-                "phenotype_count": 0}
+        return {"genes": [], "per_phenotype": [], "expanded": [], "empty": [],
+                "failed": [], "phenotype_count": 0}
 
     def fetch(phenotype: dict[str, Any]) -> tuple[dict[str, Any], Optional[list[dict]]]:
         try:
@@ -76,6 +79,7 @@ def build_symptom_gene_set(
             return phenotype, None
 
     pooled: dict[str, dict[str, Any]] = {}
+    per_phenotype: list[dict[str, Any]] = []
     expanded: list[dict[str, Any]] = []
     empty: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -93,7 +97,11 @@ def build_symptom_gene_set(
                 empty.append(label)
                 continue
 
-            label = {**label, "gene_count": len(genes)}
+            label = {**label, "gene_count": len(genes),
+                     "resources": phenotype.get("resources") or [],
+                     "ontology_id": phenotype.get("ontology_id", "")}
+            # Keep the per-symptom list so each symptom can be scored on its own.
+            per_phenotype.append({**label, "genes": [dict(g) for g in genes]})
             expanded.append(label)
             for gene in genes:
                 symbol = str(gene.get("symbol") or "").strip()
@@ -120,8 +128,15 @@ def build_symptom_gene_set(
         gene["score"] = round(gene["score"], 4)
         gene["max_score"] = round(gene["max_score"], 4)
 
+    # Preserve the input ordering (most relevant symptom first), which the
+    # thread pool does not guarantee.
+    order = {p["ontology_id"]: i for i, p in enumerate(usable)}
+    per_phenotype.sort(key=lambda p: order.get(p.get("ontology_id", ""), 1_000_000))
+    expanded.sort(key=lambda p: order.get(p.get("ontology_id", ""), 1_000_000))
+
     return {
         "genes": genes_out,
+        "per_phenotype": per_phenotype,
         "expanded": expanded,
         "empty": empty,
         "failed": failed,

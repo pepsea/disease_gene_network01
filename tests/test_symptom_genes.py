@@ -139,8 +139,8 @@ def test_a_phenotype_with_no_genes_is_reported_separately(monkeypatch):
 def test_no_phenotypes_returns_an_empty_set(monkeypatch):
     patch_genes(monkeypatch)
     result = sg.build_symptom_gene_set([])
-    assert result == {"genes": [], "expanded": [], "empty": [], "failed": [],
-                      "phenotype_count": 0}
+    assert result == {"genes": [], "per_phenotype": [], "expanded": [],
+                      "empty": [], "failed": [], "phenotype_count": 0}
 
 
 def test_only_excluded_phenotypes_returns_an_empty_set(monkeypatch):
@@ -176,6 +176,37 @@ def test_symbol_casing_is_pooled_but_display_casing_is_kept(monkeypatch):
     assert len(result["genes"]) == 1
     assert result["genes"][0]["score"] == 1.0
     assert result["genes"][0]["symbol"] in {"App", "APP"}
+
+
+# --- per-symptom lists (the matrix columns) --------------------------------
+
+def test_each_symptom_keeps_its_own_gene_list(monkeypatch):
+    patch_genes(monkeypatch)
+    per = sg.build_symptom_gene_set(PHENOTYPES)["per_phenotype"]
+    assert [p["name"] for p in per] == ["Memory impairment", "Dementia"]
+    assert [g["symbol"] for g in per[0]["genes"]] == ["APP", "MAPT"]
+    assert [g["symbol"] for g in per[1]["genes"]] == ["APP", "PSEN1"]
+
+
+def test_per_symptom_order_follows_the_input_not_the_thread_pool(monkeypatch):
+    many = [pheno(f"HP:{i:07d}", f"symptom {i}") for i in range(8)]
+    patch_genes(monkeypatch, {p["ontology_id"]: [{"symbol": f"G{i}", "score": 0.5}]
+                              for i, p in enumerate(many)})
+    per = sg.build_symptom_gene_set(many, max_workers=8)["per_phenotype"]
+    assert [p["name"] for p in per] == [f"symptom {i}" for i in range(8)]
+
+
+def test_per_symptom_entries_carry_the_annotation_sources(monkeypatch):
+    p1 = {**pheno("HP:0002354", "Memory impairment"), "resources": ["ORPHANET", "OMIM"]}
+    patch_genes(monkeypatch, {"HP_0002354": [{"symbol": "APP", "score": 0.8}]})
+    per = sg.build_symptom_gene_set([p1])["per_phenotype"]
+    assert per[0]["resources"] == ["ORPHANET", "OMIM"]
+
+
+def test_symptoms_without_genes_are_not_matrix_columns(monkeypatch):
+    patch_genes(monkeypatch, empty={"HP_0000726"})
+    per = sg.build_symptom_gene_set(PHENOTYPES)["per_phenotype"]
+    assert [p["name"] for p in per] == ["Memory impairment"]
 
 
 # --- integration with the shared scorer ------------------------------------

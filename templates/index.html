@@ -635,7 +635,7 @@ function render(data) {
     html += "<tr>"
       + "<td>" + nameCell + "</td>"
       + '<td class="num"><span class="pct ' + cls + '">' + r.weighted_percent.toFixed(1) + "%</span>"
-      + '<div class="bar" style="color:var(--' + cls + ')"><span style="width:'
+      + '<div class="bar" data-bar="1" style="color:var(--' + cls + ')"><span style="width:'
       + Math.min(100, r.weighted_percent) + '%"></span></div>'
       + '<div class="small">' + LABEL[cls] + "</div></td>"
       + '<td class="num"><span class="pct">' + r.overlap_percent.toFixed(1) + "%</span>"
@@ -885,7 +885,7 @@ function renderEnrichment(data) {
     html += "<tr>"
       + "<td>" + nameCell + "</td>"
       + '<td class="num"><span class="pct ' + cls + '">' + r.pathway_weighted_percent.toFixed(1) + "%</span>"
-      + '<div class="bar" style="color:var(--' + cls + ')"><span style="width:'
+      + '<div class="bar" data-bar="1" style="color:var(--' + cls + ')"><span style="width:'
       + Math.min(100, r.pathway_weighted_percent) + '%"></span></div>'
       + '<div class="small">' + LABEL[cls] + "</div></td>"
       + '<td class="num"><span class="pct">' + r.pathway_overlap_percent.toFixed(1) + "%</span>"
@@ -950,21 +950,38 @@ function inlineStyles(source, clone) {
   const computed = getComputedStyle(source);
   const parts = [];
   const bg = toHex(computed.getPropertyValue("background-color"));
-  // White is the default; emitting it everywhere just bloats the paste.
-  if (bg && bg !== "#ffffff") parts.push("background-color:" + bg);
   const fg = toHex(computed.getPropertyValue("color"));
+  const tag = source.tagName;
+  const isCell = tag === "TD" || tag === "TH";
+
+  if (bg && bg !== "#ffffff") {
+    parts.push("background-color:" + bg, "background:" + bg);
+    // PowerPoint and Word read the legacy bgcolor attribute far more
+    // reliably than inline CSS, so cell fills are written both ways.
+    if (isCell) clone.setAttribute("bgcolor", bg);
+  }
   if (fg) parts.push("color:" + fg);
   for (const prop of ["font-weight", "font-size", "text-align"]) {
     const value = computed.getPropertyValue(prop);
     if (value && value !== "normal") parts.push(prop + ":" + value);
   }
-  const tag = source.tagName;
-  if (tag === "TD" || tag === "TH") {
+  // Class names are stripped below, so any layout they provided has to be
+  // inlined too — otherwise block spans collapse and the header lines run
+  // together.
+  const display = computed.getPropertyValue("display");
+  if (!isCell && display && display !== "inline") parts.push("display:" + display);
+  if (isCell) {
     parts.push("border:" + COPY_BORDER, "padding:5px 8px");
+    const align = computed.getPropertyValue("text-align");
+    if (align && align !== "start") clone.setAttribute("align", align);
   }
   // Sticky columns make no sense once pasted.
   parts.push("position:static");
   clone.setAttribute("style", parts.join(";"));
+  // Class names carry no meaning once the styles are inlined, and Office
+  // sometimes tries to resolve them.
+  clone.removeAttribute("class");
+  clone.removeAttribute("title");
   const srcKids = source.children, cloneKids = clone.children;
   for (let i = 0; i < srcKids.length && i < cloneKids.length; i++) {
     inlineStyles(srcKids[i], cloneKids[i]);
@@ -983,15 +1000,18 @@ function tableToHtml(table) {
   } finally {
     table.classList.remove("force-light");
   }
-  clone.classList.remove("force-light");
-  // Progress bars are decoration; they paste as empty boxes.
-  clone.querySelectorAll(".bar").forEach((el) => el.remove());
+  // Progress bars are decoration; they paste as empty boxes. Removed after
+  // the styles are inlined, since the walk pairs source and clone by index.
+  clone.querySelectorAll('[data-bar="1"]').forEach((el) => el.remove());
   clone.setAttribute("border", "1");
   clone.setAttribute("cellspacing", "0");
   clone.setAttribute("cellpadding", "4");
   clone.setAttribute("style", (clone.getAttribute("style") || "")
     + ";border-collapse:collapse;background-color:#ffffff");
-  return '<meta charset="utf-8">' + clone.outerHTML;
+  // Office's HTML importer is happier with a complete document than with a
+  // bare fragment.
+  return '<html><head><meta charset="utf-8"></head><body>'
+    + clone.outerHTML + "</body></html>";
 }
 
 function tableToTsv(table) {
@@ -1033,11 +1053,15 @@ async function copyTable(table, button, asText) {
 }
 
 function copyBar(id) {
-  return '<div class="row" style="margin-bottom:10px">'
+  return '<div class="row" style="margin-bottom:6px">'
     + '<button type="button" class="secondary copy-html" data-t="' + id + '">'
     + "表をコピー（PowerPoint / Word）</button>"
     + '<button type="button" class="secondary copy-tsv" data-t="' + id + '">'
-    + "TSVでコピー（Excel）</button></div>";
+    + "TSVでコピー（Excel）</button></div>"
+    + '<p class="hitcount" style="margin:0 0 10px">セルの色を保ったまま貼るには、'
+    + "PowerPoint のスライド上で貼り付け後に表示される"
+    + "<b>［貼り付けのオプション］→［元の書式を保持］</b>を選んでください"
+    + "（［貼り付け先のテーマを使用］だと塗りつぶしが外れます）。</p>";
 }
 
 function bindSymptomSort() {

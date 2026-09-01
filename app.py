@@ -9,7 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 from flask import Flask, jsonify, render_template, request
 
@@ -231,6 +231,18 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         except OpenTargetsError as exc:
             return jsonify({"error": str(exc)}), 502
 
+    @app.route("/api/hpo/diseases")
+    def hpo_diseases():
+        """Search HPO's own disease registry (OMIM / Orphanet / DECIPHER)."""
+        query = (request.args.get("q") or "").strip()
+        if not query:
+            return jsonify({"error": "q is required"}), 400
+        try:
+            limit = min(int(request.args.get("limit", 10)), 25)
+        except (TypeError, ValueError):
+            limit = 10
+        return jsonify({"query": query, "results": hpo.search_diseases(query, limit=limit)})
+
     @app.route("/api/genes/validate", methods=["POST"])
     def validate_genes():
         """Check submitted symbols against HGNC without running an analysis."""
@@ -316,9 +328,12 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         if symptom_source not in VALID_SYMPTOM_SOURCES:
             symptom_source = app.config["SYMPTOM_SOURCE"]
         if want_symptoms:
+            chosen_ids = data.get("hpo_disease_ids")
+            chosen_ids = chosen_ids if isinstance(chosen_ids, list) else []
             phenotypes, symptom_meta = collect_symptoms(
                 disease_id, disease_label, symptom_source,
                 app.config["SYMPTOM_LIST_N"],
+                hpo_disease_ids=chosen_ids[:10],
             )
             if phenotypes:
                 symptom_set = build_symptom_gene_set(
@@ -449,6 +464,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                          if e.get("gene_source")}
                     ),
                     "xrefs": symptom_meta.get("xrefs", []),
+                    "xref_origin": symptom_meta.get("xref_origin", ""),
                     "phenotype_count": len(phenotypes),
                     "expanded_count": len(symptom_set["expanded"]),
                     "gene_count": len(symptom_genes),
@@ -512,15 +528,33 @@ def collect_symptoms(
     disease_label: str,
     source: str,
     list_n: int,
+    hpo_disease_ids: Optional[list[str]] = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Get the disease's symptoms, falling back from Open Targets to HPO.
 
+    Args:
+        hpo_disease_ids: OMIM / ORPHA / DECIPHER ids chosen from HPO's own
+            disease registry. When given these are used directly, skipping both
+            Open Targets and the cross-reference lookup — the disease has been
+            identified in HPO's own terms, which is more reliable than mapping
+            onto it.
+
     Returns ``(phenotypes, meta)``. ``meta`` records which source supplied the
-    symptom list, the cross references used, and the gene fetcher to expand
-    them with.
+    symptom list, the ids used, and the gene fetcher to expand them with.
     """
     meta: dict[str, Any] = {"phenotype_source": "", "xrefs": [],
-                            "gene_fetcher": _hybrid_gene_fetcher}
+                            "xref_origin": "", "gene_fetcher": _hybrid_gene_fetcher}
+
+    # A disease picked directly in HPO wins over anything derived from EFO.
+    chosen = [str(i).strip() for i in (hpo_disease_ids or []) if str(i).strip()]
+    if chosen:
+        meta["xrefs"] = chosen
+        meta["xref_origin"] = "selected"
+        meta["gene_fetcher"] = _hpo_gene_fetcher
+        phenotypes = hpo.get_disease_phenotypes(chosen, limit=list_n)
+        if phenotypes:
+            meta["phenotype_source"] = "hpo"
+        return phenotypes, meta
 
     if source in ("auto", "opentargets"):
         try:
@@ -540,9 +574,12 @@ def collect_symptoms(
         xrefs = get_disease_xrefs(disease_id)
     except OpenTargetsError as exc:
         log.info("[symptoms] cross references unavailable: %s", exc)
+    meta["xref_origin"] = "dbxrefs" if xrefs else ""
     if not xrefs and disease_label:
         # No xref: fall back to an exact disease-name match inside HPO.
         xrefs = hpo.find_disease_ids_by_name(disease_label)
+        if xrefs:
+            meta["xref_origin"] = "name"
 
     meta["xrefs"] = xrefs
     meta["gene_fetcher"] = _hpo_gene_fetcher

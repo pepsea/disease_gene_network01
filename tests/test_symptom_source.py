@@ -94,6 +94,55 @@ def test_an_xref_lookup_failure_is_not_fatal(patched):
     assert phenotypes == []          # no ids, but no exception either
 
 
+# --- a disease chosen directly in HPO --------------------------------------
+
+def test_a_chosen_hpo_disease_skips_open_targets_entirely(patched):
+    def should_not_run(*a, **k):
+        raise AssertionError("neither phenotypes nor xrefs should be consulted")
+    patched.setattr(app_module, "get_disease_phenotypes", should_not_run)
+    patched.setattr(app_module, "get_disease_xrefs", should_not_run)
+    phenotypes, meta = collect_symptoms("EFO_1", "AD", "auto", 50,
+                                        hpo_disease_ids=["ORPHA:1020"])
+    assert meta["phenotype_source"] == "hpo"
+    assert meta["xrefs"] == ["ORPHA:1020"]
+    assert meta["xref_origin"] == "selected"
+    assert [p["hpo_id"] for p in phenotypes] == ["HP:0000726"]
+
+
+def test_a_chosen_disease_uses_hpo_genes(patched):
+    _, meta = collect_symptoms("EFO_1", "AD", "auto", 50, hpo_disease_ids=["OMIM:104300"])
+    assert meta["gene_fetcher"] is app_module._hpo_gene_fetcher
+
+
+def test_several_registrations_can_be_chosen_together(patched):
+    captured = {}
+    patched.setattr(app_module.hpo, "get_disease_phenotypes",
+                    lambda ids, limit=50: captured.setdefault("ids", ids) and [] or list(HPO_PHENOTYPES))
+    collect_symptoms("EFO_1", "AD", "auto", 50,
+                     hpo_disease_ids=["OMIM:104300", "ORPHA:1020"])
+    assert captured["ids"] == ["OMIM:104300", "ORPHA:1020"]
+
+
+def test_blank_chosen_ids_are_ignored(patched):
+    phenotypes, meta = collect_symptoms("EFO_1", "Alzheimer disease", "auto", 50,
+                                        hpo_disease_ids=["", "   "])
+    # Falls through to the normal Open Targets path.
+    assert meta["phenotype_source"] == "opentargets"
+    assert meta["xref_origin"] == ""
+
+
+def test_the_xref_origin_is_recorded(patched):
+    patched.setattr(app_module, "get_disease_phenotypes", lambda d, limit=50: [])
+    _, meta = collect_symptoms("EFO_1", "AD", "auto", 50)
+    assert meta["xref_origin"] == "dbxrefs"
+
+    patched.setattr(app_module, "get_disease_xrefs", lambda d: [])
+    patched.setattr(app_module.hpo, "find_disease_ids_by_name",
+                    lambda n, limit=5: ["ORPHA:1020"])
+    _, meta = collect_symptoms("EFO_1", "Alzheimer disease", "auto", 50)
+    assert meta["xref_origin"] == "name"
+
+
 # --- gene fetchers ---------------------------------------------------------
 
 def test_hpo_sourced_symptoms_use_hpo_genes(patched):

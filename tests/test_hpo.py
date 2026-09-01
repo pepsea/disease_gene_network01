@@ -189,6 +189,84 @@ def test_a_partial_name_does_not_match(monkeypatch):
     assert hpo.find_disease_ids_by_name("Alzheimer") == []
 
 
+# --- disease registry search -----------------------------------------------
+
+def test_the_registry_lists_every_annotated_disease(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    by_id = {d["id"]: d for d in hpo.list_diseases()}
+    assert set(by_id) == {"OMIM:104300", "ORPHA:1020", "OMIM:999999"}
+    assert by_id["ORPHA:1020"]["source"] == "ORPHANET"
+    assert by_id["OMIM:104300"]["source"] == "OMIM"
+
+
+def test_phenotype_counts_exclude_inheritance_and_negated_terms(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    by_id = {d["id"]: d for d in hpo.list_diseases()}
+    # OMIM:104300: two P terms, plus an inheritance term that must not count.
+    assert by_id["OMIM:104300"]["phenotype_count"] == 2
+    # ORPHA:1020: two P terms, plus a NOT-qualified one that must not count.
+    assert by_id["ORPHA:1020"]["phenotype_count"] == 2
+
+
+def test_search_finds_a_disease_by_exact_name(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    results = hpo.search_diseases("Alzheimer disease")
+    assert {r["id"] for r in results} == {"OMIM:104300", "ORPHA:1020"}
+    assert all(r["exact"] for r in results)
+
+
+def test_search_matches_a_partial_name(monkeypatch):
+    """Unlike the automatic fallback, interactive search does partial matching."""
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert {r["id"] for r in hpo.search_diseases("alzheimer")} == {"OMIM:104300", "ORPHA:1020"}
+
+
+def test_search_is_case_insensitive(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.search_diseases("ALZHEIMER DISEASE")
+
+
+def test_exact_matches_rank_above_partial_ones(monkeypatch):
+    hpoa = HPOA + "OMIM:111111\tAlzheimer disease, familial, type 3\t\tHP:0002354\tX\tTAS\t\t\t\t\tP\tHPO:x\n"
+    monkeypatch.setattr(hpo, "SESSION", session(hpoa=hpoa))
+    results = hpo.search_diseases("Alzheimer disease")
+    assert results[0]["exact"] is True
+    assert results[-1]["id"] == "OMIM:111111"
+
+
+def test_better_annotated_diseases_rank_first_within_a_tier(monkeypatch):
+    extra = "".join(
+        f"ORPHA:1020\tAlzheimer disease\t\tHP:00{i:05d}\tX\tPCS\t\t\t\t\tP\tORPHA:x\n"
+        for i in range(3)
+    )
+    monkeypatch.setattr(hpo, "SESSION", session(hpoa=HPOA + extra))
+    results = hpo.search_diseases("Alzheimer disease")
+    # Same name and tier, so the better-annotated registration comes first.
+    assert [r["id"] for r in results] == ["ORPHA:1020", "OMIM:104300"]
+
+
+def test_both_registrations_of_one_disease_are_offered(monkeypatch):
+    """A disease is often registered in both OMIM and Orphanet."""
+    monkeypatch.setattr(hpo, "SESSION", session())
+    sources = {r["source"] for r in hpo.search_diseases("Alzheimer disease")}
+    assert sources == {"OMIM", "ORPHANET"}
+
+
+def test_search_respects_the_limit(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert len(hpo.search_diseases("disease", limit=1)) == 1
+
+
+def test_search_of_a_blank_query_returns_nothing(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.search_diseases("   ") == []
+
+
+def test_search_with_no_match_returns_nothing(monkeypatch):
+    monkeypatch.setattr(hpo, "SESSION", session())
+    assert hpo.search_diseases("no such disease anywhere") == []
+
+
 # --- degraded inputs -------------------------------------------------------
 
 def test_files_are_downloaded_once(monkeypatch):

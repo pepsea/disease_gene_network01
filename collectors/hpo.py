@@ -336,11 +336,74 @@ def get_phenotype_genes(hpo_id: str, top_n: int = 50) -> list[dict[str, Any]]:
     ]
 
 
-def find_disease_ids_by_name(name: str, limit: int = 5) -> list[str]:
-    """Look up OMIM / ORPHA ids by disease name, for when no xref is available.
+def list_diseases() -> list[dict[str, Any]]:
+    """Every disease HPO annotates, as ``{"id", "name", "source", "phenotype_count"}``.
 
-    Exact (case-insensitive) matches only — a substring match across thousands
-    of rare diseases produces the wrong disease far too easily.
+    HPO keeps its own disease registry — OMIM, Orphanet and DECIPHER entries with
+    their own names — so a disease can be picked here directly, without going
+    through Open Targets and its cross references.
+    """
+    index = _load_hpoa()
+    diseases: list[dict[str, Any]] = []
+    for disease_id, rows in index.items():
+        if not rows:
+            continue
+        name = (rows[0].get("disease_name") or "").strip()
+        diseases.append(
+            {
+                "id": disease_id,
+                "name": name or disease_id,
+                "source": _source_of(disease_id),
+                # Phenotypic abnormalities only, matching what a search result
+                # would actually yield as symptoms.
+                "phenotype_count": sum(
+                    1 for r in rows
+                    if (not r.get("aspect") or r["aspect"].upper() == "P")
+                    and r.get("qualifier") != "NOT"
+                ),
+            }
+        )
+    return diseases
+
+
+def search_diseases(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Search HPO's disease registry by name.
+
+    Exact matches rank first, then names starting with the query, then names
+    containing it; within a tier the better-annotated disease comes first. The
+    tiering matters: across thousands of rare diseases a bare substring match
+    surfaces the wrong one, but ranked and shown as candidates for the user to
+    choose from, partial matching is exactly what is wanted.
+    """
+    wanted = (query or "").strip().casefold()
+    if not wanted:
+        return []
+
+    scored: list[tuple[int, int, str, dict[str, Any]]] = []
+    for disease in list_diseases():
+        name = disease["name"].casefold()
+        if name == wanted:
+            tier = 0
+        elif name.startswith(wanted):
+            tier = 1
+        elif wanted in name:
+            tier = 2
+        else:
+            continue
+        scored.append((tier, -disease["phenotype_count"], disease["name"], disease))
+
+    scored.sort(key=lambda row: row[:3])
+    return [
+        {**disease, "exact": tier == 0}
+        for tier, _, _, disease in scored[: max(1, int(limit))]
+    ]
+
+
+def find_disease_ids_by_name(name: str, limit: int = 5) -> list[str]:
+    """Look up OMIM / ORPHA ids by an exact disease name.
+
+    Used for the automatic fallback, where nobody is present to choose between
+    candidates; :func:`search_diseases` is the interactive counterpart.
     """
     wanted = (name or "").strip().casefold()
     if not wanted:

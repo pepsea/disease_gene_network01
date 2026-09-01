@@ -179,7 +179,30 @@ HPO 直接経路が使うファイル:
 
 HPO は疾患を **OMIM / ORPHA / DECIPHER** の ID で管理しているため、EFO/MONDO からの
 変換が必要です。Open Targets の `dbXRefs` から取得し、取れない場合は疾患名の
-完全一致で照合します（部分一致は別疾患を拾いやすいため行いません）。
+完全一致で照合します（自動処理では選択者がいないため、部分一致は行いません）。
+
+### HPO の疾患を直接指定する
+
+自動変換に頼らず、**HPO 自身の疾患レジストリから疾患を選ぶ**こともできます。
+`phenotype.hpoa` は OMIM / Orphanet / DECIPHER の全疾患を固有の名前で持っているため、
+Open Targets を経由せずに疾患を特定できます。
+
+STEP 1 の「症状データの疾患を HPO で直接指定する」から検索してください。
+こちらは**部分一致**で候補を出し、完全一致 → 前方一致 → 部分一致の順、
+同じ段では注釈の多い疾患を上位に並べます（選ぶのは人なので、候補を出すのが正解）。
+
+使いどころ:
+
+- Open Targets の `dbXRefs` に OMIM / Orphanet ID がない疾患
+- OMIM / Orphanet での登録名が Open Targets と異なる疾患
+- より限定的なサブタイプで症状を見たい場合
+  （例: `Alzheimer disease` ではなく `Early-onset autosomal dominant Alzheimer disease`）
+
+同じ疾患が OMIM と Orphanet の両方に登録されていることはよくあります。
+**両方選べば注釈が統合され**、Orphanet の頻度情報と OMIM の症状の両方が入ります。
+
+指定した場合、表1・表2 は従来どおり STEP 1 で選んだ Open Targets の疾患を使い、
+**表3 だけが指定した HPO 疾患のもの**になります。
 
 なお HPO のパスウェイ-遺伝子リンクは**キュレーション済みで重み付けがない**ため、
 HPO 由来の症状ではスコアを一律 1.0 とし、加重重複率は単純重複率と一致します。
@@ -319,6 +342,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
   "enrichment": true,                  // 表2を計算するか（既定 true）
   "symptoms": true,                    // 表3を計算するか（既定 true）
   "symptom_source": "auto",            // auto / opentargets / hpo
+  "hpo_disease_ids": ["ORPHA:1848"],   // HPOで直接指定（最大10件、表3のみに影響）
   "ppi": {
     "sources": ["signor", "string", "biogrid"],
     "string_score": 700,
@@ -346,6 +370,7 @@ common disease では疎です。注釈がない疾患では表3は表示され�
     "enabled": true,
     "requested_source": "auto", "phenotype_source": "hpo",
     "gene_sources": ["hpo"], "xrefs": ["OMIM:104300", "Orphanet:1020"],
+    "xref_origin": "dbxrefs",          // selected / dbxrefs / name
     "phenotype_count": 5, "expanded_count": 3,
     "gene_count": 6, "excluded_count": 1, "unindexed_count": 1,
     "phenotypes": [ { "hpo_id": "HP:0002354", "name": "Memory impairment",
@@ -407,6 +432,18 @@ common disease では疎です。注釈がない疾患では表3は表示され�
 
 ステータスコード: `400`（入力不備・遺伝子数超過）、`404`（疾患が見つからない・
 関連遺伝子ゼロ）、`502`（Open Targets 側の障害）。
+
+### `GET /api/hpo/diseases?q=<疾患名>&limit=10`
+
+HPO 自身の疾患レジストリを検索します。
+
+```jsonc
+{ "query": "alzheimer",
+  "results": [
+    { "id": "ORPHA:1020", "name": "Alzheimer disease", "source": "ORPHANET",
+      "phenotype_count": 3, "exact": false }
+  ] }
+```
 
 ### `GET /healthz`
 
@@ -516,7 +553,8 @@ pytest
 - Open Targets が疾患として収載していない HPO 表現型は、`auto` では HPO の
   curated リンクで補完します。`opentargets` 固定にした場合はスキップされ、
   `unindexed_count` に計上されます。
-- HPO 直接経路は疾患名の**完全一致**でしか名前照合しません。`dbXRefs` に
-  OMIM / Orphanet の ID がなく、名前も一致しない疾患では表3が出ません。
+- 自動の HPO 照合は疾患名の**完全一致**のみです。`dbXRefs` に OMIM / Orphanet の
+  ID がなく名前も一致しない場合は、STEP 1 の HPO 直接指定から疾患を選んでください
+  （こちらは部分一致で検索できます）。
 - IntAct の相互作用数が取得できない遺伝子はハブ判定の対象外です
   （取得失敗を「ハブでない」とも「ハブである」とも扱いません）。

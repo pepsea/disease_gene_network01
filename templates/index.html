@@ -48,6 +48,11 @@
   .cand .id{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace;margin-left:6px}
   .cand .desc{display:block;color:var(--muted);font-size:12px;margin-top:2px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  details{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}
+  summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--accent)}
+  summary::marker{color:var(--muted)}
+  .idbadge{font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
+    background:var(--soft);border:1px solid var(--border);margin-right:5px}
   .picked{margin-top:10px;font-size:13px;padding:8px 12px;border-radius:6px;
     background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
   /* gene chips */
@@ -136,6 +141,19 @@
       <div id="cands"></div>
       <div id="picked"></div>
     </div>
+    <details id="hpo-block">
+      <summary>症状データの疾患を HPO で直接指定する（任意）</summary>
+      <p class="note" style="margin:8px 0 10px">
+        Open Targets 側で症状が取れない疾患や、OMIM / Orphanet の登録名が
+        Open Targets と異なる場合に使います。指定すると表3の症状はこの疾患のものになります。
+      </p>
+      <div class="row">
+        <input id="hpo-query" type="text" placeholder="例: Alzheimer disease" autocomplete="off" style="flex:1;min-width:220px">
+        <button id="hpo-search" type="button" class="secondary">HPO を検索</button>
+      </div>
+      <div id="hpo-cands"></div>
+      <div id="hpo-picked"></div>
+    </details>
   </div>
 
   <!-- STEP 2: genes -->
@@ -295,8 +313,73 @@ async function searchDisease() {
   }
 }
 
+// ── HPO's own disease registry ────────────────────────────────────────────
+let hpoPicked = null;   // [{id, name, source}]
+
+async function searchHpoDisease() {
+  const q = $("hpo-query").value.trim() || $("disease").value.trim();
+  if (!q) return;
+  $("hpo-search").disabled = true;
+  $("hpo-cands").innerHTML = '<p class="small" style="margin:10px 0 0"><span class="spinner"></span>HPO を検索中…（初回はデータ取得に時間がかかります）</p>';
+  try {
+    const res = await fetch("/api/hpo/diseases?q=" + encodeURIComponent(q));
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      $("hpo-cands").innerHTML = '<p class="err small">' + esc(data.error || "検索に失敗しました") + "</p>";
+      return;
+    }
+    if (!data.results.length) {
+      $("hpo-cands").innerHTML = '<p class="err small">HPO に該当する疾患が見つかりません: ' + esc(q) + "</p>";
+      return;
+    }
+    let html = '<div class="cands">';
+    data.results.forEach((r, i) => {
+      html += '<button type="button" class="cand" data-i="' + i + '">'
+        + '<span class="idbadge">' + esc(r.source) + "</span><b>" + esc(r.name) + "</b>"
+        + '<span class="id">' + esc(r.id) + "</span>"
+        + (r.exact ? ' <span class="small">— 完全一致</span>' : "")
+        + '<span class="desc">症状 ' + r.phenotype_count + " 件</span></button>";
+    });
+    html += "</div>";
+    $("hpo-cands").innerHTML = html;
+    $("hpo-cands").querySelectorAll(".cand").forEach((btn) => {
+      btn.addEventListener("click", () => selectHpoDisease(data.results[+btn.dataset.i], btn));
+    });
+  } catch (e) {
+    $("hpo-cands").innerHTML = '<p class="err small">通信エラー: ' + esc(e.message) + "</p>";
+  } finally {
+    $("hpo-search").disabled = false;
+  }
+}
+
+function selectHpoDisease(r, btn) {
+  const already = (hpoPicked || []).find((x) => x.id === r.id);
+  if (already) {
+    hpoPicked = hpoPicked.filter((x) => x.id !== r.id);
+    if (btn) btn.classList.remove("sel");
+  } else {
+    hpoPicked = (hpoPicked || []).concat([{ id: r.id, name: r.name, source: r.source }]);
+    if (btn) btn.classList.add("sel");
+  }
+  if (!hpoPicked.length) hpoPicked = null;
+  $("hpo-picked").innerHTML = hpoPicked
+    ? '<div class="picked">症状の取得元に指定: '
+      + hpoPicked.map((x) => "<b>" + esc(x.name) + "</b>（" + esc(x.id) + "）").join(" ＋ ")
+      + '<br><span class="small">同じ疾患が OMIM と Orphanet の両方にある場合、両方選ぶと注釈が統合されます。</span></div>'
+    : "";
+}
+
+function clearHpoPick() {
+  hpoPicked = null;
+  $("hpo-picked").innerHTML = "";
+  $("hpo-cands").innerHTML = "";
+}
+
 function selectDisease(r, btn) {
   picked = { id: r.id, name: r.name };
+  // A new disease invalidates any HPO pick made for the previous one.
+  clearHpoPick();
+  if (!$("hpo-query").value.trim()) $("hpo-query").value = r.name;
   $("cands").querySelectorAll(".cand").forEach((b) => b.classList.remove("sel"));
   if (btn) btn.classList.add("sel");
   $("picked").innerHTML = '<div class="picked">選択中: <b>' + esc(r.name) + "</b>（" + esc(r.id) + "）</div>";
@@ -383,6 +466,7 @@ async function run() {
   const body = { genes, ppi, enrichment: $("enrichment").checked,
                  symptoms: $("symptoms").checked,
                  symptom_source: $("symptom-source").value };
+  if (hpoPicked) body.hpo_disease_ids = hpoPicked.map((x) => x.id);
   if (picked) { body.disease_id = picked.id; body.disease = picked.name; }
   else { body.disease = typed; }
 
@@ -504,7 +588,10 @@ function renderSymptoms(data) {
         + "。各遺伝子のPPIネットワークがこの遺伝子群を何％カバーするか</p>";
   html += '<p class="srcs-line">症状の取得元: <b>' + esc(SRC_LABEL[s.phenotype_source] || s.phenotype_source || "—")
         + "</b>"
-        + (s.xrefs && s.xrefs.length ? "（照合ID: " + s.xrefs.map(esc).join(", ") + "）" : "")
+        + (s.xrefs && s.xrefs.length
+            ? "（" + ({ selected: "指定ID", dbxrefs: "相互参照", name: "疾患名照合" }[s.xref_origin] || "ID")
+              + ": " + s.xrefs.map(esc).join(", ") + "）"
+            : "")
         + (s.gene_sources && s.gene_sources.length
             ? " ／ 遺伝子の取得元: " + s.gene_sources.map((x) => esc(SRC_LABEL[x] || x)).join(" + ") : "")
         + "</p>";
@@ -716,6 +803,10 @@ function toCsv(d) {
 }
 
 $("search").addEventListener("click", searchDisease);
+$("hpo-search").addEventListener("click", searchHpoDisease);
+$("hpo-query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); searchHpoDisease(); }
+});
 $("disease").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); searchDisease(); } });
 $("check").addEventListener("click", checkGenes);
 $("run").addEventListener("click", run);

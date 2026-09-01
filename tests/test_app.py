@@ -753,6 +753,56 @@ def test_the_gene_source_is_reported_per_symptom(monkeypatch, patched):
     assert sym["matrix_symptoms"][0]["gene_source"] == "hpo"
 
 
+def test_hpo_disease_search_endpoint(monkeypatch, client):
+    monkeypatch.setattr(app_module.hpo, "search_diseases", lambda q, limit=10: [
+        {"id": "ORPHA:1020", "name": "Alzheimer disease", "source": "ORPHANET",
+         "phenotype_count": 12, "exact": True},
+        {"id": "OMIM:104300", "name": "Alzheimer disease", "source": "OMIM",
+         "phenotype_count": 8, "exact": True},
+    ])
+    body = client.get("/api/hpo/diseases?q=alzheimer").get_json()
+    assert body["query"] == "alzheimer"
+    assert [r["id"] for r in body["results"]] == ["ORPHA:1020", "OMIM:104300"]
+    assert body["results"][0]["source"] == "ORPHANET"
+
+
+def test_hpo_disease_search_requires_a_query(client):
+    assert client.get("/api/hpo/diseases?q=  ").status_code == 400
+
+
+def test_a_chosen_hpo_disease_is_used_for_the_symptoms(monkeypatch, client):
+    def should_not_run(*a, **k):
+        raise AssertionError("Open Targets must not be consulted for a chosen disease")
+    monkeypatch.setattr(app_module, "get_disease_phenotypes", should_not_run)
+    monkeypatch.setattr(app_module.hpo, "get_disease_phenotypes",
+                        lambda ids, limit=50: [dict(p) for p in PHENOTYPES])
+    body = client.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"], "hpo_disease_ids": ["ORPHA:1020"],
+    }).get_json()
+    sym = body["symptoms"]
+    assert sym["phenotype_source"] == "hpo"
+    assert sym["xrefs"] == ["ORPHA:1020"]
+    assert sym["xref_origin"] == "selected"
+
+
+def test_chosen_disease_ids_are_capped(monkeypatch, client):
+    captured = {}
+    monkeypatch.setattr(app_module.hpo, "get_disease_phenotypes",
+                        lambda ids, limit=50: captured.update(ids=ids) or [])
+    client.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"],
+        "hpo_disease_ids": [f"OMIM:{i}" for i in range(20)],
+    })
+    assert len(captured["ids"]) == 10
+
+
+def test_a_non_list_selection_is_ignored(client):
+    body = client.post("/api/analyze", json={
+        "disease": "AD", "genes": ["APP"], "hpo_disease_ids": "ORPHA:1020",
+    }).get_json()
+    assert body["symptoms"]["phenotype_source"] == "opentargets"
+
+
 # --- pages -----------------------------------------------------------------
 
 def test_index_page_renders(client):
